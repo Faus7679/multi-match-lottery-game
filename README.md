@@ -14,12 +14,12 @@ It uses a dynamic scoring system to analyze historical Monday and Thursday draw 
 
 ## Files
 
-- `/home/runner/work/multi-match-lottery-game/multi-match-lottery-game/lottery_game.py`
+- `lottery_game.py`
   - main game logic
   - dynamic scoring
   - Monday/Thursday analysis
   - ticket generation
-- `/home/runner/work/multi-match-lottery-game/multi-match-lottery-game/test_lottery_game.py`
+- `test_lottery_game.py`
   - focused unit tests
 
 ## How the dynamic system works
@@ -72,7 +72,7 @@ This gives a simple strategy view for Maryland Monday and Thursday draw behavior
 ## Run the demo
 
 ```bash
-cd /home/runner/work/multi-match-lottery-game/multi-match-lottery-game
+cd multi-match-lottery-game
 python lottery_game.py
 ```
 
@@ -85,7 +85,7 @@ Example output includes:
 ## Run the tests
 
 ```bash
-cd /home/runner/work/multi-match-lottery-game/multi-match-lottery-game
+cd multi-match-lottery-game
 python -m unittest discover
 ```
 
