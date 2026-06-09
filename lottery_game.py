@@ -201,6 +201,9 @@ def sample_maryland_history() -> tuple[DrawRecord, ...]:
         ("2026-05-21", (7, 9, 14, 28, 34, 41)),
         ("2026-05-25", (3, 7, 17, 27, 39, 41)),
         ("2026-05-28", (2, 9, 11, 25, 29, 37)),
+        ("2026-06-01", (1, 4, 12, 16, 18, 21)),
+        ("2026-06-04", (3, 6, 19, 21, 32, 33)),
+        ("2026-06-08", (10, 21, 22, 25, 26, 32)),
     )
     return tuple(
         DrawRecord(datetime.strptime(draw_date, "%Y-%m-%d").date(), numbers)
@@ -208,7 +211,13 @@ def sample_maryland_history() -> tuple[DrawRecord, ...]:
     )
 
 
-def dynamic_scores(history: Iterable[DrawRecord], draw_day: str) -> dict[int, float]:
+def dynamic_scores(
+    history: Iterable[DrawRecord],
+    draw_day: str,
+    freq_weight: float = 2.0,
+    recent_weight: float = 1.0,
+    gap_weight: float = 1.0,
+) -> dict[int, float]:
     validate_draw_day(draw_day)
     history_by_day = tuple(record for record in history if record.weekday == draw_day)
     if not history_by_day:
@@ -225,12 +234,23 @@ def dynamic_scores(history: Iterable[DrawRecord], draw_day: str) -> dict[int, fl
             history_size + 1,
         )
         exploration_bonus = 0.25 if day_hits == 0 else 0.0
-        scores[number] = (day_hits * 4.0) + (recent_hits * 2.5) + float(total_gap) + exploration_bonus
+        scores[number] = (
+            day_hits * freq_weight
+            + recent_hits * recent_weight
+            + total_gap * gap_weight
+            + exploration_bonus
+        )
     return scores
 
 
-def predict_winning_line(history: Iterable[DrawRecord], draw_day: str) -> tuple[int, ...]:
-    scores = dynamic_scores(history, draw_day)
+def predict_winning_line(
+    history: Iterable[DrawRecord],
+    draw_day: str,
+    freq_weight: float = 2.0,
+    recent_weight: float = 1.0,
+    gap_weight: float = 1.0,
+) -> tuple[int, ...]:
+    scores = dynamic_scores(history, draw_day, freq_weight, recent_weight, gap_weight)
     ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
     return tuple(sorted(number for number, _ in ranked[:DRAW_SIZE]))
 
@@ -298,6 +318,84 @@ def validate_draw_day(draw_day: str) -> None:
         raise ValueError("Draw day must be Monday or Thursday.")
 
 
+def backtest(
+    history: tuple[DrawRecord, ...],
+    min_day_draws: int = 3,
+    freq_weight: float = 2.0,
+    recent_weight: float = 1.0,
+    gap_weight: float = 1.0,
+) -> dict[str, dict]:
+    results: dict[str, list[int]] = {day: [] for day in SUPPORTED_DRAW_DAYS}
+    for i, record in enumerate(history):
+        day_prior = tuple(r for r in history[:i] if r.weekday == record.weekday)
+        if len(day_prior) < min_day_draws:
+            continue
+        predicted = predict_winning_line(day_prior, record.weekday, freq_weight, recent_weight, gap_weight)
+        results[record.weekday].append(len(set(predicted) & set(record.numbers)))
+
+    random_baseline = DRAW_SIZE * DRAW_SIZE / len(NUMBER_RANGE)
+    return {
+        day: {
+            "draws_tested": len(hits),
+            "avg_hits": sum(hits) / len(hits),
+            "random_baseline": random_baseline,
+            "lift": sum(hits) / len(hits) - random_baseline,
+            "hit_distribution": {k: hits.count(k) for k in range(DRAW_SIZE + 1)},
+        }
+        for day, hits in results.items()
+        if hits
+    }
+
+
+def format_backtest(results: dict[str, dict]) -> str:
+    lines = ["Backtest  (walk-forward: predict then verify)"]
+    for day, stats in results.items():
+        dist = stats["hit_distribution"]
+        dist_str = "  ".join(f"{k}:{dist.get(k, 0)}" for k in range(DRAW_SIZE + 1))
+        lines += [
+            f"\n  {day} - {stats['draws_tested']} draws tested",
+            f"    Avg hits:        {stats['avg_hits']:.3f}",
+            f"    Random baseline: {stats['random_baseline']:.3f}",
+            f"    Lift:            {stats['lift']:+.3f}",
+            f"    Distribution:    {dist_str}",
+        ]
+    return "\n".join(lines)
+
+
+def grid_search_weights(history: tuple[DrawRecord, ...]) -> list[dict]:
+    freq_values = (0.0, 1.0, 2.0, 4.0, 6.0, 8.0)
+    recent_values = (0.0, 1.0, 2.0, 3.0, 5.0)
+    gap_values = (0.0, 0.25, 0.5, 1.0, 2.0)
+    results = []
+    for fw in freq_values:
+        for rw in recent_values:
+            for gw in gap_values:
+                bt = backtest(history, freq_weight=fw, recent_weight=rw, gap_weight=gw)
+                combined_lift = sum(stats["lift"] for stats in bt.values())
+                results.append({
+                    "freq_weight": fw,
+                    "recent_weight": rw,
+                    "gap_weight": gw,
+                    "combined_lift": combined_lift,
+                    "by_day": bt,
+                })
+    return sorted(results, key=lambda r: -r["combined_lift"])
+
+
+def format_grid_search(results: list[dict], top_n: int = 10) -> str:
+    header = f"{'freq':>5}  {'recent':>6}  {'gap':>5}  {'Mon lift':>9}  {'Thu lift':>9}  {'combined':>9}"
+    lines = [f"Grid search - top {top_n} weight combinations (150 total)", f"  {header}"]
+    for r in results[:top_n]:
+        by_day = r["by_day"]
+        mon_lift = by_day.get("Monday", {}).get("lift", float("nan"))
+        thu_lift = by_day.get("Thursday", {}).get("lift", float("nan"))
+        lines.append(
+            f"  {r['freq_weight']:>5.1f}  {r['recent_weight']:>6.1f}  {r['gap_weight']:>5.2f}"
+            f"  {mon_lift:>+9.3f}  {thu_lift:>+9.3f}  {r['combined_lift']:>+9.3f}"
+        )
+    return "\n".join(lines)
+
+
 def format_analysis(analysis: DayAnalysis) -> str:
     recommended = ", ".join(str(number) for number in analysis.recommended_line)
     hottest = ", ".join(str(number) for number in analysis.hottest_numbers)
@@ -332,6 +430,10 @@ def main() -> None:
     print("Suggested Thursday ticket:")
     for index, line in enumerate(thursday_ticket, start=1):
         print(f"  Line {index}: {', '.join(str(number) for number in line)}")
+    print()
+    print(format_backtest(backtest(history)))
+    print()
+    print(format_grid_search(grid_search_weights(history)))
 
 
 if __name__ == "__main__":
