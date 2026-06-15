@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from random import Random
 from typing import Iterable
 
@@ -282,7 +282,18 @@ def analyze_draw_day(history: Iterable[DrawRecord], draw_day: str) -> DayAnalysi
     )
 
 
-def build_ticket(history: Iterable[DrawRecord], draw_day: str, seed: int = 7) -> tuple[tuple[int, ...], ...]:
+def next_draw_day() -> tuple[str, date]:
+    today = date.today()
+    draw_weekdays = {"Monday": 0, "Thursday": 3}
+    days_ahead = {
+        name: (target - today.weekday()) % 7 or 7
+        for name, target in draw_weekdays.items()
+    }
+    name = min(days_ahead, key=days_ahead.__getitem__)
+    return name, today + timedelta(days=days_ahead[name])
+
+
+def build_ticket(history: Iterable[DrawRecord], draw_day: str, seed: int | None = None) -> tuple[tuple[int, ...], ...]:
     prediction = predict_winning_line(history, draw_day)
     rng = Random(seed)
     ticket = [prediction]
@@ -415,6 +426,26 @@ def format_analysis(analysis: DayAnalysis) -> str:
 
 def main() -> None:
     history = sample_maryland_history()
+    draw_day, draw_date = next_draw_day()
+
+    print("=" * 50)
+    print("  Maryland Multi-Match — SMART PICK")
+    print("=" * 50)
+    print(f"  Next draw: {draw_day} {draw_date.strftime('%B %d, %Y')}")
+    print()
+
+    ticket = build_ticket(history, draw_day)
+    smart_line = ticket[0]
+    print(f"  ** Smart Pick (algorithm) **")
+    print(f"  {', '.join(str(n) for n in smart_line)}")
+    print()
+    print(f"  Full ticket ({len(ticket)} lines):")
+    for index, line in enumerate(ticket, start=1):
+        tag = " <- smart pick" if index == 1 else ""
+        print(f"    Line {index}: {', '.join(str(n) for n in line)}{tag}")
+    print("=" * 50)
+    print()
+
     monday_analysis = analyze_draw_day(history, "Monday")
     thursday_analysis = analyze_draw_day(history, "Thursday")
 
@@ -425,11 +456,6 @@ def main() -> None:
     print(format_analysis(monday_analysis))
     print()
     print(format_analysis(thursday_analysis))
-    print()
-    thursday_ticket = build_ticket(history, "Thursday")
-    print("Suggested Thursday ticket:")
-    for index, line in enumerate(thursday_ticket, start=1):
-        print(f"  Line {index}: {', '.join(str(number) for number in line)}")
     print()
     print(format_backtest(backtest(history)))
     print()
