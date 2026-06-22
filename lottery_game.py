@@ -204,6 +204,9 @@ def sample_maryland_history() -> tuple[DrawRecord, ...]:
         ("2026-06-01", (1, 4, 12, 16, 18, 21)),
         ("2026-06-04", (3, 6, 19, 21, 32, 33)),
         ("2026-06-08", (10, 21, 22, 25, 26, 32)),
+        ("2026-06-11", (4, 6, 11, 28, 29, 34)),
+        ("2026-06-15", (8, 17, 18, 19, 20, 24)),
+        ("2026-06-18", (8, 11, 20, 26, 30, 43)),
     )
     return tuple(
         DrawRecord(datetime.strptime(draw_date, "%Y-%m-%d").date(), numbers)
@@ -424,35 +427,87 @@ def format_analysis(analysis: DayAnalysis) -> str:
     )
 
 
-def main() -> None:
-    history = sample_maryland_history()
-    draw_day, draw_date = next_draw_day()
+def _try_live_history(static: tuple) -> tuple[tuple, str]:
+    """Attempt to fetch live data and merge with static history. Always returns a valid history."""
+    try:
+        from live_data import fetch_live_results, merge_history
+        live, err = fetch_live_results()
+        if live:
+            merged = merge_history(static=static, live=live)
+            label = f"LIVE  mdlottery.com  ({merged[-1].draw_date})"
+            return merged, label
+        return static, f"static fallback  (live: {err})"
+    except ImportError:
+        return static, "static  (live_data.py not found)"
+    except Exception as exc:
+        return static, f"static fallback  (error: {exc})"
 
-    print("=" * 50)
-    print("  Maryland Multi-Match — SMART PICK")
-    print("=" * 50)
-    print(f"  Next draw: {draw_day} {draw_date.strftime('%B %d, %Y')}")
-    print()
+
+def main() -> None:
+    static = sample_maryland_history()
+    history, data_label = _try_live_history(static)
+
+    draw_day, draw_date = next_draw_day()
+    today = date.today()
+    is_draw_today = draw_date == today
 
     ticket = build_ticket(history, draw_day)
     smart_line = ticket[0]
-    print(f"  ** Smart Pick (algorithm) **")
-    print(f"  {', '.join(str(n) for n in smart_line)}")
+    analysis = analyze_draw_day(history, draw_day)
+    day_history = tuple(r for r in history if r.weekday == draw_day)
+
+    W = 62
+    print("=" * W)
+    print("  Maryland Multi-Match - LIVE SMART PICK")
+    print("=" * W)
+    print(f"  Data   : {data_label}")
+    print(f"  History: {len(history)} draws  ({history[0].draw_date} to {history[-1].draw_date})")
+    print()
+
+    draw_tag = "  [DRAW IS TODAY - buy before cutoff!]" if is_draw_today else ""
+    print(f"  Next draw: {draw_day}, {draw_date.strftime('%B %d, %Y')}{draw_tag}")
+    print()
+    print("  +-----------------------------------------+")
+    print(f"  |   SMART PICK  >>  {' - '.join(f'{n:02d}' for n in smart_line):28s} |")
+    print("  +-----------------------------------------+")
     print()
     print(f"  Full ticket ({len(ticket)} lines):")
-    for index, line in enumerate(ticket, start=1):
-        tag = " <- smart pick" if index == 1 else ""
-        print(f"    Line {index}: {', '.join(str(n) for n in line)}{tag}")
-    print("=" * 50)
+    for idx, line in enumerate(ticket, start=1):
+        tag = "  <- smart pick" if idx == 1 else "  (quick pick)"
+        print(f"    Line {idx}: {', '.join(f'{n:02d}' for n in line)}{tag}")
+
+    print()
+    print("-" * W)
+    print(f"  {draw_day} analysis")
+    print("-" * W)
+    recommended = ", ".join(f"{n:02d}" for n in analysis.recommended_line)
+    hottest = ", ".join(f"{n:02d}" for n in analysis.hottest_numbers)
+    overdue = ", ".join(f"{n:02d}" for n in analysis.overdue_numbers)
+    print(f"  Recommended : {recommended}")
+    print(f"  Hottest     : {hottest}")
+    print(f"  Overdue     : {overdue}")
+    print()
+    print(f"  Top dynamic scores:")
+    for number, score in analysis.scorecard:
+        bar = "#" * int(score // 1)
+        print(f"    {number:>2}: {score:>6.2f}  {bar}")
+
+    print()
+    print("-" * W)
+    print(f"  Recent {draw_day} draws")
+    print("-" * W)
+    for r in day_history[-5:]:
+        marker = "  <- most recent" if r == day_history[-1] else ""
+        print(f"    {r.draw_date}  {' - '.join(f'{n:02d}' for n in r.numbers)}{marker}")
+
+    print()
+    print("=" * W)
     print()
 
     monday_analysis = analyze_draw_day(history, "Monday")
     thursday_analysis = analyze_draw_day(history, "Thursday")
-
-    print("Maryland Multi-Match dynamic strategy demo")
+    print("Full analysis (both draw days)")
     print("=" * 40)
-    print("Rules: choose 6 numbers from 1-43. Drawings happen on Monday and Thursday.")
-    print()
     print(format_analysis(monday_analysis))
     print()
     print(format_analysis(thursday_analysis))
