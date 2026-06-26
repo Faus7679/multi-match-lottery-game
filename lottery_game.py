@@ -207,6 +207,8 @@ def sample_maryland_history() -> tuple[DrawRecord, ...]:
         ("2026-06-11", (4, 6, 11, 28, 29, 34)),
         ("2026-06-15", (8, 17, 18, 19, 20, 24)),
         ("2026-06-18", (8, 11, 20, 26, 30, 43)),
+        ("2026-06-22", (1, 3, 9, 21, 22, 33)),
+        ("2026-06-25", (10, 15, 16, 21, 36, 40)),
     )
     return tuple(
         DrawRecord(datetime.strptime(draw_date, "%Y-%m-%d").date(), numbers)
