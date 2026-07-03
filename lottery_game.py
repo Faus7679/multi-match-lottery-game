@@ -203,7 +203,8 @@ def sample_maryland_history() -> tuple[DrawRecord, ...]:
         ("2026-05-28", (2, 9, 11, 25, 29, 37)),
         ("2026-06-01", (1, 4, 12, 16, 18, 21)),
         ("2026-06-04", (3, 6, 19, 21, 32, 33)),
-        ("2026-06-08", (10, 21, 22, 25, 26, 32)),
+        ("2026-06-08", (10, 21, 22, 25, 26, 32)),clear
+        
         ("2026-06-11", (4, 6, 11, 28, 29, 34)),
         ("2026-06-15", (8, 17, 18, 19, 20, 24)),
         ("2026-06-18", (8, 11, 20, 26, 30, 43)),
@@ -429,35 +430,25 @@ def format_analysis(analysis: DayAnalysis) -> str:
     )
 
 
-def _try_live_history(static: tuple) -> tuple[tuple, str, str | None]:
-    """
-    Attempt to fetch live data and merge with static history. Always returns a
-    valid history, plus a label and an optional warning that is set whenever
-    the smart pick is NOT based on a fresh live fetch from mdlottery.com.
-    """
+def _try_live_history(static: tuple) -> tuple[tuple, str]:
+    """Attempt to fetch live data and merge with static history. Always returns a valid history."""
     try:
         from live_data import fetch_live_results, merge_history
-        live, note, source = fetch_live_results()
+        live, err = fetch_live_results()
         if live:
             merged = merge_history(static=static, live=live)
-            if source == "live":
-                label = f"LIVE  mdlottery.com  ({merged[-1].draw_date})"
-                return merged, label, None
-            # source == "cache": a recent live fetch (within CACHE_TTL_SECONDS)
-            # is being reused. `note` is only set when the network fetch was
-            # actually attempted and failed, so only warn in that case.
-            label = f"CACHED  mdlottery.com  ({merged[-1].draw_date})"
-            return merged, label, note
-        return static, "static fallback", f"could not fetch live results: {note}"
+            label = f"LIVE  mdlottery.com  ({merged[-1].draw_date})"
+            return merged, label
+        return static, f"static fallback  (live: {err})"
     except ImportError:
-        return static, "static", "live_data.py not found; live results were not used"
+        return static, "static  (live_data.py not found)"
     except Exception as exc:
-        return static, "static fallback", f"live data fetch raised an error: {exc}"
+        return static, f"static fallback  (error: {exc})"
 
 
 def main() -> None:
     static = sample_maryland_history()
-    history, data_label, warning = _try_live_history(static)
+    history, data_label = _try_live_history(static)
 
     draw_day, draw_date = next_draw_day()
     today = date.today()
@@ -474,12 +465,6 @@ def main() -> None:
     print("=" * W)
     print(f"  Data   : {data_label}")
     print(f"  History: {len(history)} draws  ({history[0].draw_date} to {history[-1].draw_date})")
-    if warning:
-        print()
-        print("  !" + "!" * (W - 3))
-        print("  ! WARNING: smart pick is NOT based on a fresh live fetch")
-        print(f"  ! {warning}")
-        print("  !" + "!" * (W - 3))
     print()
 
     draw_tag = "  [DRAW IS TODAY - buy before cutoff!]" if is_draw_today else ""
