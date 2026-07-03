@@ -429,25 +429,35 @@ def format_analysis(analysis: DayAnalysis) -> str:
     )
 
 
-def _try_live_history(static: tuple) -> tuple[tuple, str]:
-    """Attempt to fetch live data and merge with static history. Always returns a valid history."""
+def _try_live_history(static: tuple) -> tuple[tuple, str, str | None]:
+    """
+    Attempt to fetch live data and merge with static history. Always returns a
+    valid history, plus a label and an optional warning that is set whenever
+    the smart pick is NOT based on a fresh live fetch from mdlottery.com.
+    """
     try:
         from live_data import fetch_live_results, merge_history
-        live, err = fetch_live_results()
+        live, note, source = fetch_live_results()
         if live:
             merged = merge_history(static=static, live=live)
-            label = f"LIVE  mdlottery.com  ({merged[-1].draw_date})"
-            return merged, label
-        return static, f"static fallback  (live: {err})"
+            if source == "live":
+                label = f"LIVE  mdlottery.com  ({merged[-1].draw_date})"
+                return merged, label, None
+            # source == "cache": a recent live fetch (within CACHE_TTL_SECONDS)
+            # is being reused. `note` is only set when the network fetch was
+            # actually attempted and failed, so only warn in that case.
+            label = f"CACHED  mdlottery.com  ({merged[-1].draw_date})"
+            return merged, label, note
+        return static, "static fallback", f"could not fetch live results: {note}"
     except ImportError:
-        return static, "static  (live_data.py not found)"
+        return static, "static", "live_data.py not found; live results were not used"
     except Exception as exc:
-        return static, f"static fallback  (error: {exc})"
+        return static, "static fallback", f"live data fetch raised an error: {exc}"
 
 
 def main() -> None:
     static = sample_maryland_history()
-    history, data_label = _try_live_history(static)
+    history, data_label, warning = _try_live_history(static)
 
     draw_day, draw_date = next_draw_day()
     today = date.today()
@@ -464,6 +474,12 @@ def main() -> None:
     print("=" * W)
     print(f"  Data   : {data_label}")
     print(f"  History: {len(history)} draws  ({history[0].draw_date} to {history[-1].draw_date})")
+    if warning:
+        print()
+        print("  !" + "!" * (W - 3))
+        print("  ! WARNING: smart pick is NOT based on a fresh live fetch")
+        print(f"  ! {warning}")
+        print("  !" + "!" * (W - 3))
     print()
 
     draw_tag = "  [DRAW IS TODAY - buy before cutoff!]" if is_draw_today else ""

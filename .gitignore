@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Multi-Match live data cache (regenerated at runtime)
+.live_cache.json

@@ -1,96 +1,102 @@
 """
 Fetches live Maryland Multi-Match draw results from mdlottery.com.
 
-Falls back gracefully if the site is unreachable or the page structure changes.
+Falls back gracefully if the site is unreachable or the page structure changes:
+network fetch -> local cache -> caller's static history.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import time
 import urllib.request
 from datetime import datetime
 
 RESULTS_URL = "https://www.mdlottery.com/player-tools/winning-numbers/"
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
+CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".live_cache.json")
+# Multi-Match draws twice a week, so re-hitting the site more often than this buys nothing.
+CACHE_TTL_SECONDS = 3 * 60 * 60
+
 
 def fetch_live_results() -> tuple:
     """
-    Download and parse recent Multi-Match draw records from mdlottery.com.
+    Return recent Multi-Match draw records, preferring a fresh network fetch
+    and falling back to a local cache (fresh or stale) if the network fails.
 
-    Returns (records, error_msg).  records is a tuple[DrawRecord, ...] on
-    success, None on failure.  error_msg is a str description on failure,
-    None on success.
+    Returns (records, note, source):
+      records: tuple[DrawRecord, ...] on success, None if nothing was available.
+      note:    None on a clean live fetch, otherwise a human-readable explanation.
+      source:  "live", "cache", or None.
     """
     from lottery_game import DrawRecord, SUPPORTED_DRAW_DAYS  # local import avoids circular dep
 
+    cached = _read_cache()
+    if cached is not None and (time.time() - cached.get("fetched_at", 0)) < CACHE_TTL_SECONDS:
+        records = _records_from_cache(cached, DrawRecord)
+        if records:
+            return records, None, "cache"
+
+    html, fetch_err = _download(RESULTS_URL)
+    if html is not None:
+        records = _parse_html(html, DrawRecord, SUPPORTED_DRAW_DAYS)
+        if records:
+            _write_cache(records)
+            return records, None, "live"
+        fetch_err = "parse failed: Multi-Match table not found or empty"
+
+    records = _records_from_cache(cached, DrawRecord) if cached is not None else None
+    if records:
+        return records, f"live fetch failed ({fetch_err}); using cached data", "cache"
+
+    return None, fetch_err or "unknown error", None
+
+
+def _download(url: str) -> tuple[str | None, str | None]:
     try:
-        req = urllib.request.Request(RESULTS_URL, headers={"User-Agent": _UA})
+        req = urllib.request.Request(url, headers={"User-Agent": _UA})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            html = resp.read().decode("utf-8", errors="ignore")
+            return resp.read().decode("utf-8", errors="ignore"), None
     except Exception as exc:
         return None, f"network error: {exc}"
 
-    records = _parse_html(html, DrawRecord, SUPPORTED_DRAW_DAYS)
-    if not records:
-        return None, "parse failed: Multi-Match section not found or empty"
-    return records, None
-
 
 def _parse_html(html: str, DrawRecord, SUPPORTED_DRAW_DAYS) -> tuple | None:
-    """Extract Multi-Match draw records from the full page HTML."""
-    lower = html.lower()
-
-    # Locate the Multi-Match section by its anchor id
-    start = lower.find('id="multi-match"')
-    if start == -1:
-        start = lower.find("multi-match")
-    if start == -1:
+    """Extract Multi-Match draw records from the winning-numbers table."""
+    table_match = re.search(
+        r'<table[^>]*id="table_multi-match"[^>]*>(.*?)</table>',
+        html,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not table_match:
         return None
+    table_html = table_match.group(1)
 
-    chunk = html[start:]
-
-    # Bound the search to this section only (stop at the next game section)
-    next_id = re.search(r'id="(?!multi-match)[a-z][a-z0-9-]*"', chunk[20:])
-    if next_id:
-        chunk = chunk[: 20 + next_id.start()]
-
-    # Strip HTML tags so only text content remains
-    text = re.sub(r"<[^>]+>", " ", chunk)
-    text = re.sub(r"[ \t]+", " ", text)
-
-    date_re = re.compile(r"(\d{2}/\d{2}/(?:\d{2}|\d{4}))")
-    # Match 1-2 digit numbers not adjacent to other digits
-    num_re = re.compile(r"(?<!\d)(\d{1,2})(?!\d)")
+    row_re = re.compile(
+        r'<td class="date">\s*([\d/]+)\s*</td>\s*<td class="numbers">(.*?)</td>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    ball_re = re.compile(r"<li>\s*(\d{1,2})\s*</li>", re.IGNORECASE)
 
     records: list = []
-    for dm in date_re.finditer(text):
-        date_str = dm.group(1)
-        y_part = date_str.split("/")[2]
+    for date_str, numbers_html in row_re.findall(table_html):
         try:
-            fmt = "%m/%d/%y" if len(y_part) == 2 else "%m/%d/%Y"
-            draw_date = datetime.strptime(date_str, fmt).date()
+            draw_date = datetime.strptime(date_str.strip(), "%m/%d/%y").date()
         except ValueError:
             continue
-
         if draw_date.strftime("%A") not in SUPPORTED_DRAW_DAYS:
             continue
 
-        # Collect first 6 valid lottery numbers (1-43) in the 300-char window after the date
-        window = text[dm.end() : dm.end() + 300]
-        candidates: list[int] = []
-        for nm in num_re.finditer(window):
-            n = int(nm.group(1))
-            if 1 <= n <= 43:
-                candidates.append(n)
-            if len(candidates) == 6:
-                break
-
-        if len(candidates) == 6:
-            try:
-                records.append(DrawRecord(draw_date, tuple(sorted(candidates))))
-            except (ValueError, TypeError):
-                pass
+        numbers = [int(n) for n in ball_re.findall(numbers_html)]
+        if len(numbers) != 6:
+            continue
+        try:
+            records.append(DrawRecord(draw_date, tuple(sorted(numbers))))
+        except (ValueError, TypeError):
+            continue
 
     if not records:
         return None
@@ -100,6 +106,40 @@ def _parse_html(html: str, DrawRecord, SUPPORTED_DRAW_DAYS) -> tuple | None:
     for r in records:
         seen.setdefault(r.draw_date, r)
     return tuple(sorted(seen.values(), key=lambda r: r.draw_date))
+
+
+def _read_cache() -> dict | None:
+    try:
+        with open(CACHE_PATH, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _records_from_cache(cached: dict, DrawRecord) -> tuple | None:
+    try:
+        records = tuple(
+            DrawRecord(datetime.strptime(row["date"], "%Y-%m-%d").date(), tuple(row["numbers"]))
+            for row in cached["records"]
+        )
+        return records or None
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+def _write_cache(records: tuple) -> None:
+    payload = {
+        "fetched_at": time.time(),
+        "records": [
+            {"date": r.draw_date.isoformat(), "numbers": list(r.numbers)}
+            for r in records
+        ],
+    }
+    try:
+        with open(CACHE_PATH, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+    except OSError:
+        pass
 
 
 def merge_history(static: tuple, live: tuple) -> tuple:
