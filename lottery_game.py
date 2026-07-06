@@ -203,8 +203,7 @@ def sample_maryland_history() -> tuple[DrawRecord, ...]:
         ("2026-05-28", (2, 9, 11, 25, 29, 37)),
         ("2026-06-01", (1, 4, 12, 16, 18, 21)),
         ("2026-06-04", (3, 6, 19, 21, 32, 33)),
-        ("2026-06-08", (10, 21, 22, 25, 26, 32)),clear
-        
+        ("2026-06-08", (10, 21, 22, 25, 26, 32)),
         ("2026-06-11", (4, 6, 11, 28, 29, 34)),
         ("2026-06-15", (8, 17, 18, 19, 20, 24)),
         ("2026-06-18", (8, 11, 20, 26, 30, 43)),
@@ -434,10 +433,10 @@ def _try_live_history(static: tuple) -> tuple[tuple, str]:
     """Attempt to fetch live data and merge with static history. Always returns a valid history."""
     try:
         from live_data import fetch_live_results, merge_history
-        live, err = fetch_live_results()
+        live, err, source = fetch_live_results()
         if live:
             merged = merge_history(static=static, live=live)
-            label = f"LIVE  mdlottery.com  ({merged[-1].draw_date})"
+            label = f"{source.upper()}  mdlottery.com  ({merged[-1].draw_date})"
             return merged, label
         return static, f"static fallback  (live: {err})"
     except ImportError:
