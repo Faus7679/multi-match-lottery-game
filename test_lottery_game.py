@@ -1,13 +1,24 @@
 import unittest
+from datetime import date
+from unittest.mock import patch
 
 from lottery_game import (
     DrawRecord,
     analyze_draw_day,
     build_ticket,
     evaluate_ticket,
+    next_draw_day,
     predict_winning_line,
     sample_maryland_history,
 )
+
+
+class _FixedDate(date):
+    _fixed: date
+
+    @classmethod
+    def today(cls) -> date:
+        return cls._fixed
 
 
 class LotteryGameTests(unittest.TestCase):
@@ -39,6 +50,20 @@ class LotteryGameTests(unittest.TestCase):
         for line in ticket:
             self.assertEqual(len(line), 6)
             self.assertEqual(line, tuple(sorted(line)))
+
+    def test_next_draw_day_reports_today_when_today_is_a_draw_day(self) -> None:
+        fixed = type("_Monday", (_FixedDate,), {"_fixed": date(2026, 7, 27)})  # Monday
+        with patch("lottery_game.date", fixed):
+            name, draw_date = next_draw_day()
+
+        self.assertEqual((name, draw_date), ("Monday", date(2026, 7, 27)))
+
+    def test_next_draw_day_skips_ahead_to_the_nearest_draw_day(self) -> None:
+        fixed = type("_Wednesday", (_FixedDate,), {"_fixed": date(2026, 7, 29)})  # Wednesday
+        with patch("lottery_game.date", fixed):
+            name, draw_date = next_draw_day()
+
+        self.assertEqual((name, draw_date), ("Thursday", date(2026, 7, 30)))
 
     def test_evaluate_ticket_counts_matches_per_line(self) -> None:
         ticket = (

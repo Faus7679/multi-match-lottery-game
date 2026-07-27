@@ -19,6 +19,11 @@ It uses a dynamic scoring system to analyze historical Monday and Thursday draw 
   - dynamic scoring
   - Monday/Thursday analysis
   - ticket generation
+  - prints the smart pick and the most recent actual winning numbers in bold/color when the terminal supports it
+- `live_data.py`
+  - fetches recent draw results from mdlottery.com, with local caching and a static-data fallback
+- `analysis.py`
+  - deep statistical report: frequency, pairs, sums, gaps, momentum, backtest, and ticket recommendations
 - `test_lottery_game.py`
   - focused unit tests
 

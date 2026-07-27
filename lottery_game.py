@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from random import Random
@@ -9,6 +11,55 @@ NUMBER_RANGE = range(1, 44)
 DRAW_SIZE = 6
 LINES_PER_TICKET = 3
 SUPPORTED_DRAW_DAYS = ("Monday", "Thursday")
+
+
+class Style:
+    """ANSI styling for the winning numbers. Falls back to plain text when the
+    terminal doesn't support color (piped output, NO_COLOR, unsupported Windows console)."""
+
+    BOLD = ""
+    YELLOW = ""
+    GREEN = ""
+    RESET = ""
+
+    def __init__(self, enabled: bool) -> None:
+        if enabled:
+            self.BOLD = "\033[1m"
+            self.YELLOW = "\033[93m"
+            self.GREEN = "\033[92m"
+            self.RESET = "\033[0m"
+
+    @classmethod
+    def detect(cls) -> "Style":
+        return cls(_supports_color())
+
+
+def _supports_color() -> bool:
+    if os.environ.get("NO_COLOR"):
+        return False
+    if not sys.stdout.isatty():
+        return False
+    if sys.platform == "win32":
+        return _enable_windows_ansi()
+    return True
+
+
+def _enable_windows_ansi() -> bool:
+    """Turn on ANSI escape processing for the current Windows console, if possible."""
+    try:
+        import ctypes
+
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        if not kernel32.SetConsoleMode(handle, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING):
+            return False
+        return True
+    except Exception:
+        return False
 
 
 @dataclass(frozen=True)
@@ -288,10 +339,11 @@ def analyze_draw_day(history: Iterable[DrawRecord], draw_day: str) -> DayAnalysi
 
 
 def next_draw_day() -> tuple[str, date]:
+    """Return the next Multi-Match draw day, treating today as "next" if today is a draw day."""
     today = date.today()
     draw_weekdays = {"Monday": 0, "Thursday": 3}
     days_ahead = {
-        name: (target - today.weekday()) % 7 or 7
+        name: (target - today.weekday()) % 7
         for name, target in draw_weekdays.items()
     }
     name = min(days_ahead, key=days_ahead.__getitem__)
@@ -446,6 +498,7 @@ def _try_live_history(static: tuple) -> tuple[tuple, str]:
 
 
 def main() -> None:
+    style = Style.detect()
     static = sample_maryland_history()
     history, data_label = _try_live_history(static)
 
@@ -466,17 +519,24 @@ def main() -> None:
     print(f"  History: {len(history)} draws  ({history[0].draw_date} to {history[-1].draw_date})")
     print()
 
-    draw_tag = "  [DRAW IS TODAY - buy before cutoff!]" if is_draw_today else ""
+    draw_tag = f"  {style.BOLD}{style.YELLOW}[DRAW IS TODAY - buy before cutoff!]{style.RESET}" if is_draw_today else ""
     print(f"  Next draw: {draw_day}, {draw_date.strftime('%B %d, %Y')}{draw_tag}")
     print()
-    print("  +-----------------------------------------+")
-    print(f"  |   SMART PICK  >>  {' - '.join(f'{n:02d}' for n in smart_line):28s} |")
-    print("  +-----------------------------------------+")
+
+    smart_pick_str = " - ".join(f"{n:02d}" for n in smart_line)
+    box_inner = f"   SMART PICK  >>  {smart_pick_str}   "
+    border = "-" * len(box_inner)
+    print(f"  {style.BOLD}{style.YELLOW}+{border}+{style.RESET}")
+    print(f"  {style.BOLD}{style.YELLOW}|{box_inner}|{style.RESET}")
+    print(f"  {style.BOLD}{style.YELLOW}+{border}+{style.RESET}")
     print()
     print(f"  Full ticket ({len(ticket)} lines):")
     for idx, line in enumerate(ticket, start=1):
-        tag = "  <- smart pick" if idx == 1 else "  (quick pick)"
-        print(f"    Line {idx}: {', '.join(f'{n:02d}' for n in line)}{tag}")
+        line_str = ", ".join(f"{n:02d}" for n in line)
+        if idx == 1:
+            print(f"    Line {idx}: {style.BOLD}{style.YELLOW}{line_str}{style.RESET}  <- smart pick")
+        else:
+            print(f"    Line {idx}: {line_str}  (quick pick)")
 
     print()
     print("-" * W)
@@ -485,7 +545,7 @@ def main() -> None:
     recommended = ", ".join(f"{n:02d}" for n in analysis.recommended_line)
     hottest = ", ".join(f"{n:02d}" for n in analysis.hottest_numbers)
     overdue = ", ".join(f"{n:02d}" for n in analysis.overdue_numbers)
-    print(f"  Recommended : {recommended}")
+    print(f"  Recommended : {style.BOLD}{style.YELLOW}{recommended}{style.RESET}")
     print(f"  Hottest     : {hottest}")
     print(f"  Overdue     : {overdue}")
     print()
@@ -499,8 +559,12 @@ def main() -> None:
     print(f"  Recent {draw_day} draws")
     print("-" * W)
     for r in day_history[-5:]:
-        marker = "  <- most recent" if r == day_history[-1] else ""
-        print(f"    {r.draw_date}  {' - '.join(f'{n:02d}' for n in r.numbers)}{marker}")
+        is_latest = r == day_history[-1]
+        numbers_str = " - ".join(f"{n:02d}" for n in r.numbers)
+        if is_latest:
+            print(f"    {r.draw_date}  {style.BOLD}{style.GREEN}{numbers_str}{style.RESET}  <- most recent (actual winning numbers)")
+        else:
+            print(f"    {r.draw_date}  {numbers_str}")
 
     print()
     print("=" * W)
