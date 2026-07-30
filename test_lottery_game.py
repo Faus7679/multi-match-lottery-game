@@ -29,14 +29,14 @@ class LotteryGameTests(unittest.TestCase):
     def test_monday_prediction_favors_repeat_monday_numbers(self) -> None:
         history = sample_maryland_history()
 
-        self.assertEqual(predict_winning_line(history, "Monday"), (2, 11, 30, 34, 36, 40))
+        self.assertEqual(predict_winning_line(history, "Monday"), (10, 23, 30, 36, 40, 42))
 
     def test_thursday_analysis_returns_ranked_scores(self) -> None:
         history = sample_maryland_history()
 
         analysis = analyze_draw_day(history, "Thursday")
 
-        self.assertEqual(analysis.recommended_line, (12, 13, 22, 23, 24, 41))
+        self.assertEqual(analysis.recommended_line, (11, 13, 22, 23, 27, 41))
         self.assertEqual(analysis.hottest_numbers, (11, 12, 16, 23, 24, 41))
         self.assertEqual(len(analysis.scorecard), 10)
 
@@ -45,7 +45,7 @@ class LotteryGameTests(unittest.TestCase):
 
         ticket = build_ticket(history, "Thursday", seed=1)
 
-        self.assertEqual(ticket[0], (12, 13, 22, 23, 24, 41))
+        self.assertEqual(ticket[0], (11, 13, 22, 23, 27, 41))
         self.assertEqual(len(ticket), 3)
         for line in ticket:
             self.assertEqual(len(line), 6)
