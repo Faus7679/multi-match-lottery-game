@@ -11,24 +11,7 @@ NUMBER_RANGE = range(1, 44)
 DRAW_SIZE = 6
 LINES_PER_TICKET = 3
 SUPPORTED_DRAW_DAYS = ("Monday", "Thursday")
-
-SMART_TICKETS: tuple[tuple[tuple[int, ...], ...], ...] = (
-    (
-        (12, 18, 27, 37, 40, 41),
-        (3, 6, 8, 20, 33, 42),
-        (10, 13, 17, 21, 25, 35),
-    ),
-    (
-        (9, 10, 25, 39, 41, 42),
-        (6, 8, 12, 19, 28, 39),
-        (2, 7, 11, 12, 27, 42),
-    ),
-    (
-        (2, 10, 21, 25, 27, 36),
-        (9, 15, 27, 28, 40, 42),
-        (14, 15, 16, 27, 37, 40),
-    ),
-)
+SMART_TICKET_COUNT = 3
 
 
 class Style:
@@ -390,6 +373,28 @@ def generate_quick_pick(rng: Random) -> tuple[int, ...]:
     return tuple(sorted(rng.sample(tuple(NUMBER_RANGE), DRAW_SIZE)))
 
 
+def generate_smart_tickets(
+    history: Iterable[DrawRecord],
+    draw_day: str,
+    num_tickets: int = SMART_TICKET_COUNT,
+    seed: int | None = None,
+) -> tuple[tuple[tuple[int, ...], ...], ...]:
+    """Build fresh smart tickets: each ticket leads with the dynamic prediction
+    for draw_day, followed by unique quick-pick lines. Regenerated every call,
+    so pass a seed for reproducible output (e.g. in tests)."""
+    prediction = predict_winning_line(history, draw_day)
+    rng = Random(seed)
+    tickets = []
+    for _ in range(num_tickets):
+        ticket = [prediction]
+        while len(ticket) < LINES_PER_TICKET:
+            candidate = generate_quick_pick(rng)
+            if candidate not in ticket:
+                ticket.append(candidate)
+        tickets.append(tuple(ticket))
+    return tuple(tickets)
+
+
 def evaluate_ticket(
     ticket: Iterable[Iterable[int]],
     winning_numbers: Iterable[int],
@@ -548,9 +553,10 @@ def main() -> None:
     print(f"  Next draw: {draw_day}, {draw_date.strftime('%B %d, %Y')}{draw_tag}")
     print()
 
+    smart_tickets = generate_smart_tickets(history, draw_day)
     print(f"  {style.BOLD}{style.YELLOW}Smart Tickets{style.RESET}")
     print("-" * W)
-    for ticket_idx, ticket in enumerate(SMART_TICKETS, start=1):
+    for ticket_idx, ticket in enumerate(smart_tickets, start=1):
         print(f"  Ticket {ticket_idx}:")
         for line_idx, line in enumerate(ticket, start=1):
             line_str = ", ".join(f"{n:02d}" for n in line)

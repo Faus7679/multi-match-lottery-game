@@ -63,6 +63,8 @@ For the requested draw day, each number gets a dynamic score based on:
 2. quick-pick line
 3. quick-pick line
 
+`generate_smart_tickets()` calls this pattern multiple times to produce the "Smart Tickets" shown by `main()`: every ticket leads with the same dynamic prediction, and the quick-pick lines are freshly randomized on each run of the script.
+
 ### Step 6: Review the Monday and Thursday strategy
 
 `analyze_draw_day()` returns:
