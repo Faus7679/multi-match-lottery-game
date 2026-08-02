@@ -12,6 +12,24 @@ DRAW_SIZE = 6
 LINES_PER_TICKET = 3
 SUPPORTED_DRAW_DAYS = ("Monday", "Thursday")
 
+SMART_TICKETS: tuple[tuple[tuple[int, ...], ...], ...] = (
+    (
+        (7, 10, 12, 20, 27, 33),
+        (9, 12, 14, 16, 18, 27),
+        (10, 12, 15, 21, 25, 27),
+    ),
+    (
+        (8, 10, 11, 25, 35, 39),
+        (15, 19, 28, 40, 41, 42),
+        (3, 6, 17, 27, 41, 42),
+    ),
+    (
+        (2, 9, 36, 37, 40, 42),
+        (2, 8, 13, 21, 40, 42),
+        (6, 25, 27, 28, 37, 39),
+    ),
+)
+
 
 class Style:
     """ANSI styling for the winning numbers. Falls back to plain text when the
@@ -515,8 +533,6 @@ def main() -> None:
     today = date.today()
     is_draw_today = draw_date == today
 
-    ticket = build_ticket(history, draw_day)
-    smart_line = ticket[0]
     analysis = analyze_draw_day(history, draw_day)
     day_history = tuple(r for r in history if r.weekday == draw_day)
 
@@ -532,22 +548,15 @@ def main() -> None:
     print(f"  Next draw: {draw_day}, {draw_date.strftime('%B %d, %Y')}{draw_tag}")
     print()
 
-    smart_pick_str = " - ".join(f"{n:02d}" for n in smart_line)
-    box_inner = f"   SMART PICK  >>  {smart_pick_str}   "
-    border = "-" * len(box_inner)
-    print(f"  {style.BOLD}{style.YELLOW}+{border}+{style.RESET}")
-    print(f"  {style.BOLD}{style.YELLOW}|{box_inner}|{style.RESET}")
-    print(f"  {style.BOLD}{style.YELLOW}+{border}+{style.RESET}")
-    print()
-    print(f"  Full ticket ({len(ticket)} lines):")
-    for idx, line in enumerate(ticket, start=1):
-        line_str = ", ".join(f"{n:02d}" for n in line)
-        if idx == 1:
-            print(f"    Line {idx}: {style.BOLD}{style.YELLOW}{line_str}{style.RESET}  <- smart pick")
-        else:
-            print(f"    Line {idx}: {line_str}  (quick pick)")
+    print(f"  {style.BOLD}{style.YELLOW}Smart Tickets{style.RESET}")
+    print("-" * W)
+    for ticket_idx, ticket in enumerate(SMART_TICKETS, start=1):
+        print(f"  Ticket {ticket_idx}:")
+        for line_idx, line in enumerate(ticket, start=1):
+            line_str = ", ".join(f"{n:02d}" for n in line)
+            print(f"    Line {line_idx}: {style.BOLD}{style.YELLOW}{line_str}{style.RESET}")
+        print()
 
-    print()
     print("-" * W)
     print(f"  {draw_day} analysis")
     print("-" * W)

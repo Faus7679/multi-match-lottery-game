@@ -3,11 +3,14 @@ from datetime import date
 from unittest.mock import patch
 
 from lottery_game import (
+    DRAW_SIZE,
+    SMART_TICKETS,
     DrawRecord,
     analyze_draw_day,
     build_ticket,
     evaluate_ticket,
     next_draw_day,
+    normalize_line,
     predict_winning_line,
     sample_maryland_history,
 )
@@ -64,6 +67,14 @@ class LotteryGameTests(unittest.TestCase):
             name, draw_date = next_draw_day()
 
         self.assertEqual((name, draw_date), ("Thursday", date(2026, 7, 30)))
+
+    def test_smart_tickets_are_three_valid_tickets(self) -> None:
+        self.assertEqual(len(SMART_TICKETS), 3)
+        for ticket in SMART_TICKETS:
+            self.assertEqual(len(ticket), 3)
+            for line in ticket:
+                self.assertEqual(normalize_line(line), line)
+                self.assertEqual(len(line), DRAW_SIZE)
 
     def test_evaluate_ticket_counts_matches_per_line(self) -> None:
         ticket = (
