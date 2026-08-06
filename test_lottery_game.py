@@ -29,30 +29,39 @@ class LotteryGameTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Monday and Thursday"):
             DrawRecord.fromisoformat("2026-05-19", (1, 2, 3, 4, 5, 6))
 
-    def test_monday_prediction_favors_repeat_monday_numbers(self) -> None:
+    def test_predict_winning_line_returns_a_valid_line(self) -> None:
+        line = predict_winning_line("Monday", seed=1)
+
+        self.assertEqual(normalize_line(line), line)
+        self.assertEqual(len(line), DRAW_SIZE)
+
+    def test_predict_winning_line_is_reproducible_with_a_seed(self) -> None:
+        self.assertEqual(predict_winning_line("Thursday", seed=7), predict_winning_line("Thursday", seed=7))
+
+    def test_predict_winning_line_rejects_invalid_draw_day(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Monday or Thursday"):
+            predict_winning_line("Tuesday")
+
+    def test_thursday_analysis_returns_valid_line_and_historical_stats(self) -> None:
         history = sample_maryland_history()
 
-        self.assertEqual(predict_winning_line(history, "Monday"), (10, 23, 30, 36, 40, 42))
+        analysis = analyze_draw_day(history, "Thursday", seed=1)
 
-    def test_thursday_analysis_returns_ranked_scores(self) -> None:
-        history = sample_maryland_history()
-
-        analysis = analyze_draw_day(history, "Thursday")
-
-        self.assertEqual(analysis.recommended_line, (11, 13, 22, 23, 27, 41))
+        self.assertEqual(analysis.recommended_line, predict_winning_line("Thursday", seed=1))
         self.assertEqual(analysis.hottest_numbers, (11, 12, 16, 23, 24, 41))
-        self.assertEqual(len(analysis.scorecard), 10)
+        self.assertEqual(len(analysis.overdue_numbers), DRAW_SIZE)
 
-    def test_build_ticket_starts_with_prediction(self) -> None:
-        history = sample_maryland_history()
+    def test_build_ticket_is_reproducible_with_a_seed(self) -> None:
+        ticket = build_ticket("Thursday", seed=1)
 
-        ticket = build_ticket(history, "Thursday", seed=1)
-
-        self.assertEqual(ticket[0], (11, 13, 22, 23, 27, 41))
+        self.assertEqual(ticket, build_ticket("Thursday", seed=1))
         self.assertEqual(len(ticket), 3)
+        seen: set[tuple[int, ...]] = set()
         for line in ticket:
-            self.assertEqual(len(line), 6)
+            self.assertEqual(len(line), DRAW_SIZE)
             self.assertEqual(line, tuple(sorted(line)))
+            self.assertNotIn(line, seen)
+            seen.add(line)
 
     def test_next_draw_day_reports_today_when_today_is_a_draw_day(self) -> None:
         fixed = type("_Monday", (_FixedDate,), {"_fixed": date(2026, 7, 27)})  # Monday
@@ -69,23 +78,21 @@ class LotteryGameTests(unittest.TestCase):
         self.assertEqual((name, draw_date), ("Thursday", date(2026, 7, 30)))
 
     def test_generate_smart_tickets_returns_three_valid_tickets(self) -> None:
-        history = sample_maryland_history()
-
-        tickets = generate_smart_tickets(history, "Thursday", seed=1)
+        tickets = generate_smart_tickets("Thursday", seed=1)
 
         self.assertEqual(len(tickets), 3)
         for ticket in tickets:
             self.assertEqual(len(ticket), 3)
-            self.assertEqual(ticket[0], predict_winning_line(history, "Thursday"))
+            lines_in_ticket: set[tuple[int, ...]] = set()
             for line in ticket:
                 self.assertEqual(normalize_line(line), line)
                 self.assertEqual(len(line), DRAW_SIZE)
+                self.assertNotIn(line, lines_in_ticket)
+                lines_in_ticket.add(line)
 
     def test_generate_smart_tickets_varies_between_runs(self) -> None:
-        history = sample_maryland_history()
-
-        first = generate_smart_tickets(history, "Thursday")
-        second = generate_smart_tickets(history, "Thursday")
+        first = generate_smart_tickets("Thursday")
+        second = generate_smart_tickets("Thursday")
 
         self.assertNotEqual(first, second)
 

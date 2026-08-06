@@ -89,7 +89,6 @@ class DayAnalysis:
     recommended_line: tuple[int, ...]
     hottest_numbers: tuple[int, ...]
     overdue_numbers: tuple[int, ...]
-    scorecard: tuple[tuple[int, float], ...]
 
 
 def normalize_line(numbers: Iterable[int]) -> tuple[int, ...]:
@@ -277,52 +276,15 @@ def sample_maryland_history() -> tuple[DrawRecord, ...]:
     )
 
 
-def dynamic_scores(
-    history: Iterable[DrawRecord],
-    draw_day: str,
-    freq_weight: float = 2.0,
-    recent_weight: float = 1.0,
-    gap_weight: float = 1.0,
-) -> dict[int, float]:
+def predict_winning_line(draw_day: str, seed: int | None = None) -> tuple[int, ...]:
+    """Real Multi-Match draws are independent random events, so the 'recommended'
+    line is a plain random pick rather than a guess derived from past results."""
     validate_draw_day(draw_day)
-    history_by_day = tuple(record for record in history if record.weekday == draw_day)
-    if not history_by_day:
-        raise ValueError(f"No history is available for {draw_day}.")
-
-    recent_window = history_by_day[-3:]
-    scores: dict[int, float] = {}
-    history_size = len(history_by_day)
-    for number in NUMBER_RANGE:
-        day_hits = sum(number in record.numbers for record in history_by_day)
-        recent_hits = sum(number in record.numbers for record in recent_window)
-        total_gap = next(
-            (offset for offset, record in enumerate(reversed(history_by_day), start=1) if number in record.numbers),
-            history_size + 1,
-        )
-        exploration_bonus = 0.25 if day_hits == 0 else 0.0
-        scores[number] = (
-            day_hits * freq_weight
-            + recent_hits * recent_weight
-            + total_gap * gap_weight
-            + exploration_bonus
-        )
-    return scores
+    return generate_quick_pick(Random(seed))
 
 
-def predict_winning_line(
-    history: Iterable[DrawRecord],
-    draw_day: str,
-    freq_weight: float = 2.0,
-    recent_weight: float = 1.0,
-    gap_weight: float = 1.0,
-) -> tuple[int, ...]:
-    scores = dynamic_scores(history, draw_day, freq_weight, recent_weight, gap_weight)
-    ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
-    return tuple(sorted(number for number, _ in ranked[:DRAW_SIZE]))
-
-
-def analyze_draw_day(history: Iterable[DrawRecord], draw_day: str) -> DayAnalysis:
-    scores = dynamic_scores(history, draw_day)
+def analyze_draw_day(history: Iterable[DrawRecord], draw_day: str, seed: int | None = None) -> DayAnalysis:
+    validate_draw_day(draw_day)
     day_history = tuple(record for record in history if record.weekday == draw_day)
     frequency_rank = sorted(
         NUMBER_RANGE,
@@ -338,13 +300,11 @@ def analyze_draw_day(history: Iterable[DrawRecord], draw_day: str) -> DayAnalysi
             number,
         ),
     )
-    ranked_scores = tuple(sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:10])
     return DayAnalysis(
         draw_day=draw_day,
-        recommended_line=predict_winning_line(day_history, draw_day),
+        recommended_line=predict_winning_line(draw_day, seed=seed),
         hottest_numbers=tuple(sorted(frequency_rank[:DRAW_SIZE])),
         overdue_numbers=tuple(sorted(overdue_rank[:DRAW_SIZE])),
-        scorecard=ranked_scores,
     )
 
 
@@ -360,12 +320,14 @@ def next_draw_day() -> tuple[str, date]:
     return name, today + timedelta(days=days_ahead[name])
 
 
-def build_ticket(history: Iterable[DrawRecord], draw_day: str, seed: int | None = None) -> tuple[tuple[int, ...], ...]:
-    prediction = predict_winning_line(history, draw_day)
+def build_ticket(draw_day: str, seed: int | None = None) -> tuple[tuple[int, ...], ...]:
+    validate_draw_day(draw_day)
     rng = Random(seed)
-    ticket = [prediction]
+    ticket: list[tuple[int, ...]] = []
     while len(ticket) < LINES_PER_TICKET:
-        ticket.append(generate_quick_pick(rng))
+        candidate = generate_quick_pick(rng)
+        if candidate not in ticket:
+            ticket.append(candidate)
     return tuple(ticket)
 
 
@@ -374,19 +336,17 @@ def generate_quick_pick(rng: Random) -> tuple[int, ...]:
 
 
 def generate_smart_tickets(
-    history: Iterable[DrawRecord],
     draw_day: str,
     num_tickets: int = SMART_TICKET_COUNT,
     seed: int | None = None,
 ) -> tuple[tuple[tuple[int, ...], ...], ...]:
-    """Build fresh smart tickets: each ticket leads with the dynamic prediction
-    for draw_day, followed by unique quick-pick lines. Regenerated every call,
-    so pass a seed for reproducible output (e.g. in tests)."""
-    prediction = predict_winning_line(history, draw_day)
+    """Build fresh tickets of unique, randomly drawn lines for draw_day.
+    Regenerated every call, so pass a seed for reproducible output (e.g. in tests)."""
+    validate_draw_day(draw_day)
     rng = Random(seed)
     tickets = []
     for _ in range(num_tickets):
-        ticket = [prediction]
+        ticket: list[tuple[int, ...]] = []
         while len(ticket) < LINES_PER_TICKET:
             candidate = generate_quick_pick(rng)
             if candidate not in ticket:
@@ -418,98 +378,15 @@ def validate_draw_day(draw_day: str) -> None:
         raise ValueError("Draw day must be Monday or Thursday.")
 
 
-def backtest(
-    history: tuple[DrawRecord, ...],
-    min_day_draws: int = 3,
-    freq_weight: float = 2.0,
-    recent_weight: float = 1.0,
-    gap_weight: float = 1.0,
-) -> dict[str, dict]:
-    results: dict[str, list[int]] = {day: [] for day in SUPPORTED_DRAW_DAYS}
-    for i, record in enumerate(history):
-        day_prior = tuple(r for r in history[:i] if r.weekday == record.weekday)
-        if len(day_prior) < min_day_draws:
-            continue
-        predicted = predict_winning_line(day_prior, record.weekday, freq_weight, recent_weight, gap_weight)
-        results[record.weekday].append(len(set(predicted) & set(record.numbers)))
-
-    random_baseline = DRAW_SIZE * DRAW_SIZE / len(NUMBER_RANGE)
-    return {
-        day: {
-            "draws_tested": len(hits),
-            "avg_hits": sum(hits) / len(hits),
-            "random_baseline": random_baseline,
-            "lift": sum(hits) / len(hits) - random_baseline,
-            "hit_distribution": {k: hits.count(k) for k in range(DRAW_SIZE + 1)},
-        }
-        for day, hits in results.items()
-        if hits
-    }
-
-
-def format_backtest(results: dict[str, dict]) -> str:
-    lines = ["Backtest  (walk-forward: predict then verify)"]
-    for day, stats in results.items():
-        dist = stats["hit_distribution"]
-        dist_str = "  ".join(f"{k}:{dist.get(k, 0)}" for k in range(DRAW_SIZE + 1))
-        lines += [
-            f"\n  {day} - {stats['draws_tested']} draws tested",
-            f"    Avg hits:        {stats['avg_hits']:.3f}",
-            f"    Random baseline: {stats['random_baseline']:.3f}",
-            f"    Lift:            {stats['lift']:+.3f}",
-            f"    Distribution:    {dist_str}",
-        ]
-    return "\n".join(lines)
-
-
-def grid_search_weights(history: tuple[DrawRecord, ...]) -> list[dict]:
-    freq_values = (0.0, 1.0, 2.0, 4.0, 6.0, 8.0)
-    recent_values = (0.0, 1.0, 2.0, 3.0, 5.0)
-    gap_values = (0.0, 0.25, 0.5, 1.0, 2.0)
-    results = []
-    for fw in freq_values:
-        for rw in recent_values:
-            for gw in gap_values:
-                bt = backtest(history, freq_weight=fw, recent_weight=rw, gap_weight=gw)
-                combined_lift = sum(stats["lift"] for stats in bt.values())
-                results.append({
-                    "freq_weight": fw,
-                    "recent_weight": rw,
-                    "gap_weight": gw,
-                    "combined_lift": combined_lift,
-                    "by_day": bt,
-                })
-    return sorted(results, key=lambda r: -r["combined_lift"])
-
-
-def format_grid_search(results: list[dict], top_n: int = 10) -> str:
-    header = f"{'freq':>5}  {'recent':>6}  {'gap':>5}  {'Mon lift':>9}  {'Thu lift':>9}  {'combined':>9}"
-    lines = [f"Grid search - top {top_n} weight combinations (150 total)", f"  {header}"]
-    for r in results[:top_n]:
-        by_day = r["by_day"]
-        mon_lift = by_day.get("Monday", {}).get("lift", float("nan"))
-        thu_lift = by_day.get("Thursday", {}).get("lift", float("nan"))
-        lines.append(
-            f"  {r['freq_weight']:>5.1f}  {r['recent_weight']:>6.1f}  {r['gap_weight']:>5.2f}"
-            f"  {mon_lift:>+9.3f}  {thu_lift:>+9.3f}  {r['combined_lift']:>+9.3f}"
-        )
-    return "\n".join(lines)
-
-
 def format_analysis(analysis: DayAnalysis) -> str:
     recommended = ", ".join(str(number) for number in analysis.recommended_line)
     hottest = ", ".join(str(number) for number in analysis.hottest_numbers)
     overdue = ", ".join(str(number) for number in analysis.overdue_numbers)
-    score_lines = "\n".join(
-        f"    {number:>2}: {score:.2f}"
-        for number, score in analysis.scorecard
-    )
     return (
         f"{analysis.draw_day} analysis\n"
-        f"  Recommended line: {recommended}\n"
+        f"  Recommended line (random pick): {recommended}\n"
         f"  Hottest numbers: {hottest}\n"
-        f"  Overdue numbers: {overdue}\n"
-        f"  Top dynamic scores:\n{score_lines}"
+        f"  Overdue numbers: {overdue}"
     )
 
 
@@ -543,7 +420,7 @@ def main() -> None:
 
     W = 62
     print("=" * W)
-    print("  Maryland Multi-Match - LIVE SMART PICK")
+    print("  Maryland Multi-Match - RANDOM PICK")
     print("=" * W)
     print(f"  Data   : {data_label}")
     print(f"  History: {len(history)} draws  ({history[0].draw_date} to {history[-1].draw_date})")
@@ -553,10 +430,10 @@ def main() -> None:
     print(f"  Next draw: {draw_day}, {draw_date.strftime('%B %d, %Y')}{draw_tag}")
     print()
 
-    smart_tickets = generate_smart_tickets(history, draw_day)
-    print(f"  {style.BOLD}{style.YELLOW}Smart Tickets{style.RESET}")
+    random_tickets = generate_smart_tickets(draw_day)
+    print(f"  {style.BOLD}{style.YELLOW}Random Tickets{style.RESET}")
     print("-" * W)
-    for ticket_idx, ticket in enumerate(smart_tickets, start=1):
+    for ticket_idx, ticket in enumerate(random_tickets, start=1):
         print(f"  Ticket {ticket_idx}:")
         for line_idx, line in enumerate(ticket, start=1):
             line_str = ", ".join(f"{n:02d}" for n in line)
@@ -569,14 +446,9 @@ def main() -> None:
     recommended = ", ".join(f"{n:02d}" for n in analysis.recommended_line)
     hottest = ", ".join(f"{n:02d}" for n in analysis.hottest_numbers)
     overdue = ", ".join(f"{n:02d}" for n in analysis.overdue_numbers)
-    print(f"  Recommended : {style.BOLD}{style.YELLOW}{recommended}{style.RESET}")
-    print(f"  Hottest     : {hottest}")
-    print(f"  Overdue     : {overdue}")
-    print()
-    print(f"  Top dynamic scores:")
-    for number, score in analysis.scorecard:
-        bar = "#" * int(score // 1)
-        print(f"    {number:>2}: {score:>6.2f}  {bar}")
+    print(f"  Recommended (random pick) : {style.BOLD}{style.YELLOW}{recommended}{style.RESET}")
+    print(f"  Hottest                   : {hottest}")
+    print(f"  Overdue                   : {overdue}")
 
     print()
     print("-" * W)
@@ -601,10 +473,6 @@ def main() -> None:
     print(format_analysis(monday_analysis))
     print()
     print(format_analysis(thursday_analysis))
-    print()
-    print(format_backtest(backtest(history)))
-    print()
-    print(format_grid_search(grid_search_weights(history)))
 
 
 if __name__ == "__main__":

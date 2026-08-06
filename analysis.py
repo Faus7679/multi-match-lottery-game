@@ -19,10 +19,6 @@ from lottery_game import (
     NUMBER_RANGE,
     DrawRecord,
     analyze_draw_day,
-    backtest,
-    format_backtest,
-    format_grid_search,
-    grid_search_weights,
     predict_winning_line,
     sample_maryland_history,
 )
@@ -151,8 +147,6 @@ def momentum_report(history: tuple[DrawRecord, ...]) -> None:
 def recommendations(history: tuple[DrawRecord, ...]) -> None:
     _section("TICKET RECOMMENDATIONS")
 
-    best_weights = {"freq_weight": 2.0, "recent_weight": 1.0, "gap_weight": 1.0}
-
     for day_label in ("Monday", "Thursday"):
         day_hist = tuple(r for r in history if r.weekday == day_label)
         analysis = analyze_draw_day(history, day_label)
@@ -169,12 +163,12 @@ def recommendations(history: tuple[DrawRecord, ...]) -> None:
         momentum_freq = Counter(n for r in recent10 for n in r.numbers)
         momentum_line = sorted(num for num, _ in momentum_freq.most_common(6))
 
-        line1 = list(predict_winning_line(history, day_label, **best_weights))
+        line1 = list(predict_winning_line(day_label))
         line2 = sorted(top6_overdue)
         line3 = momentum_line
 
         print(f"\n  {day_label}")
-        print(f"    Line 1 — dynamic algorithm (freq=2/recent=1/gap=1): {line1}")
+        print(f"    Line 1 — random pick:                               {line1}")
         print(f"    Line 2 — top-6 overdue numbers:                     {line2}")
         print(f"    Line 3 — momentum (top-6 in last 10 draws):         {line3}")
         print(f"    Hottest numbers:  {list(analysis.hottest_numbers)}")
@@ -198,14 +192,6 @@ def main() -> None:
     statistical_patterns(history)
     gap_report(history)
     momentum_report(history)
-
-    _section("WALK-FORWARD BACKTEST")
-    print()
-    print(format_backtest(backtest(history)))
-
-    _section("GRID SEARCH — OPTIMAL SCORING WEIGHTS")
-    print()
-    print(format_grid_search(grid_search_weights(history)))
 
     recommendations(history)
 
