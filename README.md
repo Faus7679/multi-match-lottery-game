@@ -51,7 +51,16 @@ This keeps the stats day-specific instead of mixing both draw schedules together
 
 `generate_smart_tickets()` calls this pattern multiple times to produce the "Random Tickets" shown by `main()`: every line, on every ticket, is freshly randomized on each run of the script.
 
-### Step 5: Review the Monday and Thursday history
+### Step 5: Check tickets against the actual draw once it's published
+
+`find_actual_result()` looks in the (live-merged) history for an official record matching the
+upcoming draw day and date. If mdlottery.com has already published that draw's numbers — e.g. you
+run the script after the draw has happened — `main()` shows the real winning numbers instead of a
+random guess, and scores every generated ticket against them with `evaluate_ticket()` (per-line
+matches, best line, total matched numbers). If the draw hasn't happened yet, the tickets are shown
+as plain random picks with no accuracy claim, since a real Multi-Match drawing can't be predicted.
+
+### Step 6: Review the Monday and Thursday history
 
 `analyze_draw_day()` returns:
 

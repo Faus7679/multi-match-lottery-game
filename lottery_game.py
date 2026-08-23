@@ -373,6 +373,15 @@ def evaluate_ticket(
     }
 
 
+def find_actual_result(history: Iterable[DrawRecord], draw_day: str, draw_date: date) -> DrawRecord | None:
+    """Return the official draw record for draw_day/draw_date if it has already been
+    published in history (e.g. merged in from live_data.py), otherwise None."""
+    for record in history:
+        if record.weekday == draw_day and record.draw_date == draw_date:
+            return record
+    return None
+
+
 def validate_draw_day(draw_day: str) -> None:
     if draw_day not in SUPPORTED_DRAW_DAYS:
         raise ValueError("Draw day must be Monday or Thursday.")
@@ -417,6 +426,7 @@ def main() -> None:
 
     analysis = analyze_draw_day(history, draw_day)
     day_history = tuple(r for r in history if r.weekday == draw_day)
+    actual_result = find_actual_result(history, draw_day, draw_date)
 
     W = 62
     print("=" * W)
@@ -431,22 +441,44 @@ def main() -> None:
     print()
 
     random_tickets = generate_smart_tickets(draw_day)
-    print(f"  {style.BOLD}{style.YELLOW}Random Tickets{style.RESET}")
-    print("-" * W)
-    for ticket_idx, ticket in enumerate(random_tickets, start=1):
-        print(f"  Ticket {ticket_idx}:")
-        for line_idx, line in enumerate(ticket, start=1):
-            line_str = ", ".join(f"{n:02d}" for n in line)
-            print(f"    Line {line_idx}: {style.BOLD}{style.YELLOW}{line_str}{style.RESET}")
+
+    if actual_result is not None:
+        winning_str = ", ".join(f"{n:02d}" for n in actual_result.numbers)
+        print(f"  {style.BOLD}{style.GREEN}Official results are in for {draw_day}, {draw_date.strftime('%B %d, %Y')}!{style.RESET}")
+        print(f"  Winning numbers: {style.BOLD}{style.GREEN}{winning_str}{style.RESET}")
         print()
+        print(f"  {style.BOLD}{style.YELLOW}Ticket Results{style.RESET}")
+        print("-" * W)
+        for ticket_idx, ticket in enumerate(random_tickets, start=1):
+            result = evaluate_ticket(ticket, actual_result.numbers)
+            best = result["best_line_match_count"]
+            total = result["total_matched_numbers"]
+            print(f"  Ticket {ticket_idx}:  best line match {best}/{DRAW_SIZE}  |  total matched numbers {total}")
+            for line_idx, (line, match_count) in enumerate(zip(ticket, result["per_line_matches"]), start=1):
+                line_str = ", ".join(f"{n:02d}" for n in line)
+                marker = f"  <- {match_count} match{'es' if match_count != 1 else ''}" if match_count else ""
+                highlight = style.BOLD + style.GREEN if match_count else ""
+                reset = style.RESET if match_count else ""
+                print(f"    Line {line_idx}: {highlight}{line_str}{reset}{marker}")
+            print()
+    else:
+        print(f"  {style.BOLD}{style.YELLOW}Random Tickets{style.RESET}  (results not published yet - draws are independent random events)")
+        print("-" * W)
+        for ticket_idx, ticket in enumerate(random_tickets, start=1):
+            print(f"  Ticket {ticket_idx}:")
+            for line_idx, line in enumerate(ticket, start=1):
+                line_str = ", ".join(f"{n:02d}" for n in line)
+                print(f"    Line {line_idx}: {style.BOLD}{style.YELLOW}{line_str}{style.RESET}")
+            print()
 
     print("-" * W)
     print(f"  {draw_day} analysis")
     print("-" * W)
-    recommended = ", ".join(f"{n:02d}" for n in analysis.recommended_line)
     hottest = ", ".join(f"{n:02d}" for n in analysis.hottest_numbers)
     overdue = ", ".join(f"{n:02d}" for n in analysis.overdue_numbers)
-    print(f"  Recommended (random pick) : {style.BOLD}{style.YELLOW}{recommended}{style.RESET}")
+    if actual_result is None:
+        recommended = ", ".join(f"{n:02d}" for n in analysis.recommended_line)
+        print(f"  Recommended (random pick) : {style.BOLD}{style.YELLOW}{recommended}{style.RESET}")
     print(f"  Hottest                   : {hottest}")
     print(f"  Overdue                   : {overdue}")
 

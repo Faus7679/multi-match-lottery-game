@@ -8,6 +8,7 @@ from lottery_game import (
     analyze_draw_day,
     build_ticket,
     evaluate_ticket,
+    find_actual_result,
     generate_smart_tickets,
     next_draw_day,
     normalize_line,
@@ -95,6 +96,30 @@ class LotteryGameTests(unittest.TestCase):
         second = generate_smart_tickets("Thursday")
 
         self.assertNotEqual(first, second)
+
+    def test_find_actual_result_returns_published_record_for_the_draw_day_and_date(self) -> None:
+        history = (
+            DrawRecord(date(2026, 7, 27), (2, 24, 32, 33, 37, 39)),
+            DrawRecord(date(2026, 7, 30), (1, 2, 3, 4, 5, 6)),
+        )
+
+        result = find_actual_result(history, "Thursday", date(2026, 7, 30))
+
+        self.assertEqual(result, history[1])
+
+    def test_find_actual_result_returns_none_when_draw_not_yet_published(self) -> None:
+        history = (DrawRecord(date(2026, 7, 27), (2, 24, 32, 33, 37, 39)),)
+
+        result = find_actual_result(history, "Thursday", date(2026, 7, 30))
+
+        self.assertIsNone(result)
+
+    def test_find_actual_result_ignores_same_date_on_a_different_weekday(self) -> None:
+        history = (DrawRecord(date(2026, 7, 30), (1, 2, 3, 4, 5, 6)),)
+
+        result = find_actual_result(history, "Monday", date(2026, 7, 30))
+
+        self.assertIsNone(result)
 
     def test_evaluate_ticket_counts_matches_per_line(self) -> None:
         ticket = (
