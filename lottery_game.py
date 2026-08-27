@@ -372,9 +372,9 @@ def generate_ml_smart_tickets(
 ) -> MLTicketResult:
     """Try an ML-weighted pick: a logistic regression per number trained on causal
     historical features (frequency, recency, overdue gap, pair momentum -- see
-    ml_model.py). Multi-Match draws are independent random events, so this has
-    no proven predictive edge; the reported held-out AUC (near 0.5 = coin flip)
-    makes that honest rather than implied. Falls back to a plain random pick
+    ml_model.py). Its predicted probabilities bias which numbers get sampled;
+    the held-out AUC is reported alongside so you can see how well the model's
+    ranking actually held up on recent draws. Falls back to a plain random pick
     if scikit-learn/pandas aren't installed or there isn't enough history to
     train on."""
     try:
@@ -397,8 +397,7 @@ def generate_ml_smart_tickets(
     if report.auc is not None:
         note = (
             f"trained on {report.n_draws} draws; held-out ROC-AUC={report.auc:.3f} "
-            f"over last {report.holdout_size} draws (0.5=coin flip, as expected for "
-            f"independent random draws)"
+            f"over last {report.holdout_size} draws"
         )
     else:
         note = f"trained on {report.n_draws} draws (held-out AUC unavailable)"
@@ -494,7 +493,7 @@ def main() -> None:
     actual_result = find_actual_result(history, draw_day, draw_date)
 
     ml_result = generate_ml_smart_tickets(history)
-    header = "Maryland Multi-Match - ML WEIGHTED PICK" if ml_result.source == "ml" else "Maryland Multi-Match - RANDOM PICK"
+    header = "Maryland Multi-Match - ML-Weighted Pick" if ml_result.source == "ml" else "Maryland Multi-Match - Random Pick"
 
     W = 62
     print("=" * W)
@@ -535,7 +534,7 @@ def main() -> None:
                 print(f"    Line {line_idx}: {highlight}{line_str}{reset}{marker}")
             print()
     else:
-        print(f"  {style.BOLD}{style.YELLOW}{ticket_label}{style.RESET}  (results not published yet - draws are independent random events)")
+        print(f"  {style.BOLD}{style.YELLOW}{ticket_label}{style.RESET}  (results not published yet)")
         print("-" * W)
         for ticket_idx, ticket in enumerate(tickets, start=1):
             print(f"  Ticket {ticket_idx}:")
@@ -546,10 +545,12 @@ def main() -> None:
 
     if ml_result.source == "ml" and ml_result.ranked_numbers:
         top10 = ", ".join(f"{n}({p:.3f})" for n, p in ml_result.ranked_numbers[:10])
+        auc_note = f"{ml_result.auc:.3f}" if ml_result.auc is not None else "n/a"
         print("-" * W)
         print(f"  Top-10 numbers by model probability: {top10}")
-        print(f"  DISCLAIMER: held-out AUC near 0.5 means the model has no real")
-        print(f"  predictive edge -- Multi-Match draws are independent random events.")
+        print(f"  Held-out AUC: {auc_note}  (0.5 = model found no usable signal; each")
+        print(f"  draw is an independent random event, so treat every line as a pick,")
+        print(f"  not a prediction.)")
         print()
 
     print("-" * W)
