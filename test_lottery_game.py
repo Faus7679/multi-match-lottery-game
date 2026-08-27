@@ -9,6 +9,7 @@ from lottery_game import (
     build_ticket,
     evaluate_ticket,
     find_actual_result,
+    generate_ml_smart_tickets,
     generate_smart_tickets,
     next_draw_day,
     normalize_line,
@@ -120,6 +121,49 @@ class LotteryGameTests(unittest.TestCase):
         result = find_actual_result(history, "Monday", date(2026, 7, 30))
 
         self.assertIsNone(result)
+
+    def test_generate_ml_smart_tickets_trains_on_full_history(self) -> None:
+        history = sample_maryland_history()
+
+        result = generate_ml_smart_tickets(history, seed=1)
+
+        self.assertEqual(result.source, "ml")
+        self.assertIsNotNone(result.ranked_numbers)
+        self.assertEqual(len(result.ranked_numbers), max(range(1, 44)))
+        if result.auc is not None:
+            self.assertGreaterEqual(result.auc, 0.0)
+            self.assertLessEqual(result.auc, 1.0)
+        self._assert_valid_tickets(result.tickets)
+
+    def test_generate_ml_smart_tickets_is_reproducible_with_a_seed(self) -> None:
+        history = sample_maryland_history()
+
+        first = generate_ml_smart_tickets(history, seed=3)
+        second = generate_ml_smart_tickets(history, seed=3)
+
+        self.assertEqual(first.tickets, second.tickets)
+        self.assertEqual(first.auc, second.auc)
+
+    def test_generate_ml_smart_tickets_falls_back_to_random_with_thin_history(self) -> None:
+        history = sample_maryland_history()[:10]
+
+        result = generate_ml_smart_tickets(history, seed=1)
+
+        self.assertEqual(result.source, "random")
+        self.assertIsNone(result.ranked_numbers)
+        self.assertIsNone(result.auc)
+        self._assert_valid_tickets(result.tickets)
+
+    def _assert_valid_tickets(self, tickets: tuple) -> None:
+        self.assertEqual(len(tickets), 3)
+        for ticket in tickets:
+            self.assertEqual(len(ticket), 3)
+            lines_in_ticket: set[tuple[int, ...]] = set()
+            for line in ticket:
+                self.assertEqual(normalize_line(line), line)
+                self.assertEqual(len(line), DRAW_SIZE)
+                self.assertNotIn(line, lines_in_ticket)
+                lines_in_ticket.add(line)
 
     def test_evaluate_ticket_counts_matches_per_line(self) -> None:
         ticket = (

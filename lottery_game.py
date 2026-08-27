@@ -91,6 +91,15 @@ class DayAnalysis:
     overdue_numbers: tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class MLTicketResult:
+    tickets: tuple[tuple[tuple[int, ...], ...], ...]
+    source: str  # "ml" or "random"
+    note: str
+    ranked_numbers: tuple[tuple[int, float], ...] | None = None
+    auc: float | None = None
+
+
 def normalize_line(numbers: Iterable[int]) -> tuple[int, ...]:
     normalized = tuple(sorted(set(numbers)))
     if len(normalized) != DRAW_SIZE:
@@ -355,6 +364,62 @@ def generate_smart_tickets(
     return tuple(tickets)
 
 
+def generate_ml_smart_tickets(
+    history: Iterable[DrawRecord],
+    num_tickets: int = SMART_TICKET_COUNT,
+    lines_per_ticket: int = LINES_PER_TICKET,
+    seed: int | None = None,
+) -> MLTicketResult:
+    """Try an ML-weighted pick: a logistic regression per number trained on causal
+    historical features (frequency, recency, overdue gap, pair momentum -- see
+    ml_model.py). Multi-Match draws are independent random events, so this has
+    no proven predictive edge; the reported held-out AUC (near 0.5 = coin flip)
+    makes that honest rather than implied. Falls back to a plain random pick
+    if scikit-learn/pandas aren't installed or there isn't enough history to
+    train on."""
+    try:
+        import ml_model
+    except ImportError:
+        return MLTicketResult(
+            _random_tickets(num_tickets, lines_per_ticket, seed),
+            "random",
+            "ML libraries (scikit-learn/pandas) not installed",
+        )
+
+    try:
+        report = ml_model.train_number_model(
+            tuple(history), pool_size=max(NUMBER_RANGE), draw_size=DRAW_SIZE, seed=seed
+        )
+    except ml_model.InsufficientHistory as exc:
+        return MLTicketResult(_random_tickets(num_tickets, lines_per_ticket, seed), "random", str(exc))
+
+    tickets = ml_model.generate_ml_tickets(report, num_tickets, lines_per_ticket, DRAW_SIZE, seed=seed)
+    if report.auc is not None:
+        note = (
+            f"trained on {report.n_draws} draws; held-out ROC-AUC={report.auc:.3f} "
+            f"over last {report.holdout_size} draws (0.5=coin flip, as expected for "
+            f"independent random draws)"
+        )
+    else:
+        note = f"trained on {report.n_draws} draws (held-out AUC unavailable)"
+    return MLTicketResult(tickets, "ml", note, report.ranked_numbers, report.auc)
+
+
+def _random_tickets(
+    num_tickets: int, lines_per_ticket: int, seed: int | None
+) -> tuple[tuple[tuple[int, ...], ...], ...]:
+    rng = Random(seed)
+    tickets = []
+    for _ in range(num_tickets):
+        ticket: list[tuple[int, ...]] = []
+        while len(ticket) < lines_per_ticket:
+            candidate = generate_quick_pick(rng)
+            if candidate not in ticket:
+                ticket.append(candidate)
+        tickets.append(tuple(ticket))
+    return tuple(tickets)
+
+
 def evaluate_ticket(
     ticket: Iterable[Iterable[int]],
     winning_numbers: Iterable[int],
@@ -428,28 +493,36 @@ def main() -> None:
     day_history = tuple(r for r in history if r.weekday == draw_day)
     actual_result = find_actual_result(history, draw_day, draw_date)
 
+    ml_result = generate_ml_smart_tickets(history)
+    header = "Maryland Multi-Match - ML WEIGHTED PICK" if ml_result.source == "ml" else "Maryland Multi-Match - RANDOM PICK"
+
     W = 62
     print("=" * W)
-    print("  Maryland Multi-Match - RANDOM PICK")
+    print(f"  {header}")
     print("=" * W)
     print(f"  Data   : {data_label}")
     print(f"  History: {len(history)} draws  ({history[0].draw_date} to {history[-1].draw_date})")
+    if ml_result.source == "ml":
+        print(f"  Model  : logistic regression per number, {ml_result.note}")
+    else:
+        print(f"  Model  : random pick ({ml_result.note})")
     print()
 
     draw_tag = f"  {style.BOLD}{style.YELLOW}[DRAW IS TODAY - buy before cutoff!]{style.RESET}" if is_draw_today else ""
     print(f"  Next draw: {draw_day}, {draw_date.strftime('%B %d, %Y')}{draw_tag}")
     print()
 
-    random_tickets = generate_smart_tickets(draw_day)
+    tickets = ml_result.tickets
+    ticket_label = "ML-Weighted Tickets" if ml_result.source == "ml" else "Random Tickets"
 
     if actual_result is not None:
         winning_str = ", ".join(f"{n:02d}" for n in actual_result.numbers)
         print(f"  {style.BOLD}{style.GREEN}Official results are in for {draw_day}, {draw_date.strftime('%B %d, %Y')}!{style.RESET}")
         print(f"  Winning numbers: {style.BOLD}{style.GREEN}{winning_str}{style.RESET}")
         print()
-        print(f"  {style.BOLD}{style.YELLOW}Ticket Results{style.RESET}")
+        print(f"  {style.BOLD}{style.YELLOW}Ticket Results ({ticket_label}){style.RESET}")
         print("-" * W)
-        for ticket_idx, ticket in enumerate(random_tickets, start=1):
+        for ticket_idx, ticket in enumerate(tickets, start=1):
             result = evaluate_ticket(ticket, actual_result.numbers)
             best = result["best_line_match_count"]
             total = result["total_matched_numbers"]
@@ -462,14 +535,22 @@ def main() -> None:
                 print(f"    Line {line_idx}: {highlight}{line_str}{reset}{marker}")
             print()
     else:
-        print(f"  {style.BOLD}{style.YELLOW}Random Tickets{style.RESET}  (results not published yet - draws are independent random events)")
+        print(f"  {style.BOLD}{style.YELLOW}{ticket_label}{style.RESET}  (results not published yet - draws are independent random events)")
         print("-" * W)
-        for ticket_idx, ticket in enumerate(random_tickets, start=1):
+        for ticket_idx, ticket in enumerate(tickets, start=1):
             print(f"  Ticket {ticket_idx}:")
             for line_idx, line in enumerate(ticket, start=1):
                 line_str = ", ".join(f"{n:02d}" for n in line)
                 print(f"    Line {line_idx}: {style.BOLD}{style.YELLOW}{line_str}{style.RESET}")
             print()
+
+    if ml_result.source == "ml" and ml_result.ranked_numbers:
+        top10 = ", ".join(f"{n}({p:.3f})" for n, p in ml_result.ranked_numbers[:10])
+        print("-" * W)
+        print(f"  Top-10 numbers by model probability: {top10}")
+        print(f"  DISCLAIMER: held-out AUC near 0.5 means the model has no real")
+        print(f"  predictive edge -- Multi-Match draws are independent random events.")
+        print()
 
     print("-" * W)
     print(f"  {draw_day} analysis")
