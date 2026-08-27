@@ -1,5 +1,0 @@
-# Optional: only needed for the ML-weighted pick in ml_model.py.
-# Without these, lottery_game.py automatically falls back to a plain random pick.
-pandas
-numpy
-scikit-learn
