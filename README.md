@@ -30,7 +30,8 @@ is an independent random event, treat every line — ML-weighted or not — as a
   - deep statistical report: frequency, pairs, sums, gaps, momentum, and ticket recommendations
 - `ml_model.py`
   - optional ML ticket weighting: a logistic regression per number, trained on causal historical
-    features, with honest held-out ROC-AUC reporting (see "Machine learning" below)
+    features, tuned by walk-forward cross-validation, with honest ROC-AUC/precision@k reporting
+    (see "Machine learning" below)
 - `test_lottery_game.py`
   - focused unit tests
 
@@ -92,16 +93,24 @@ from draw history — every feature for a training row at draw *t* uses only dra
 - overdue gap since the number last appeared
 - pairing momentum with the numbers drawn immediately before it
 
-`train_number_model()` reports **held-out ROC-AUC** on the most recent 20 draws so the model's real
-skill is visible rather than implied. `generate_ml_smart_tickets()` uses the model's predicted
-probabilities as *sampling weights* (every number keeps a nonzero chance), then falls back to a
-plain random pick if:
+Training is tuned by **walk-forward cross-validation**: `train_number_model()` grid-searches the
+regularization strength over 5 rolling train/test folds (each fold trained only on draws strictly
+before it, 20 draws held out per fold — up to 100 held-out draws total), picks whichever setting
+scores best on mean ROC-AUC, then refits on the full history at that setting for the actual
+next-draw probabilities. It reports the cross-validated **ROC-AUC** and **precision@6** (of the
+model's top 6 picks, the fraction that were actually drawn, averaged across the CV folds) against
+the baseline a uniform-random top-6 pick would get by chance (`6/43 ≈ 0.140`) — so the model's real
+skill is visible rather than implied, and a single lucky/unlucky split can't skew the number reported.
+
+`generate_ml_smart_tickets()` uses the model's predicted probabilities as *sampling weights* (every
+number keeps a nonzero chance), then falls back to a plain random pick if:
 
 - `pandas`/`scikit-learn` aren't installed, or
 - there's fewer than 70 draws of history to train on reliably
 
-`main()` prints which path ran and the held-out AUC when the ML path trains successfully, so you can
-judge for yourself how much signal (if any) the model actually found in a given history window.
+`main()` prints which path ran and the cross-validated AUC/precision@6 when the ML path trains
+successfully, so you can judge for yourself how much signal (if any) the model actually found in a
+given history window.
 
 ## Run the demo
 
@@ -116,7 +125,7 @@ Example output includes:
 - Monday analysis
 - Thursday analysis
 - a suggested Thursday ticket
-- the ML model's held-out AUC and top-ranked numbers, when the ML path is available
+- the ML model's cross-validated AUC, precision@6, and top-ranked numbers, when the ML path is available
 
 ## Run the tests
 

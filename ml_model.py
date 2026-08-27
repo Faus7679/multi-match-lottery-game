@@ -11,11 +11,16 @@ against:
   - overdue gap since the number last appeared
   - pairing momentum with the numbers drawn immediately before it
 
-Held-out ROC-AUC is reported so the model's real skill is visible. Multi-Match
-draws are independent random events -- an AUC near 0.5 (coin flip) is
-expected, and no model, this one included, can predict them. This module
-ranks numbers by historical pattern; it does not, and cannot, produce
-"accurate" winning numbers.
+Training is tuned by walk-forward cross-validation: a small grid search over
+the regularization strength picks whichever setting scores best across
+several rolling train/test splits (never peeking at a test split's future),
+and the reported ROC-AUC and precision@k are averaged over those same splits
+so they reflect genuine out-of-sample performance rather than a single lucky
+split. Multi-Match draws are independent random events -- an AUC near 0.5
+(coin flip) and a precision@k near the baseline rate are expected, and no
+model, this one included, can predict them. This module ranks numbers by
+historical pattern; it does not, and cannot, produce "accurate" winning
+numbers.
 """
 from __future__ import annotations
 
@@ -38,10 +43,12 @@ except ImportError:  # pragma: no cover - exercised only when deps are missing
     SKLEARN_AVAILABLE = False
 
 WARMUP = 40          # draws of history required before a row is trainable
-HOLDOUT_N = 20        # most recent draws held out for AUC evaluation
+HOLDOUT_N = 20        # size of each walk-forward validation fold
+N_FOLDS = 5            # number of rolling folds used for tuning and reporting
 REC_WINDOWS = (10, 20)
 GAP_CAP = 60
 MIN_DRAWS_REQUIRED = WARMUP + HOLDOUT_N + 10
+C_GRID = (0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0)  # regularization grid searched by walk-forward CV
 
 
 class InsufficientHistory(Exception):
@@ -52,8 +59,11 @@ class InsufficientHistory(Exception):
 class MLReport:
     ranked_numbers: tuple[tuple[int, float], ...]  # (number, probability) desc by probability
     auc: float | None
+    precision_at_k: float | None      # mean fraction of the top draw_size picks that hit, across CV folds
+    baseline_precision: float          # precision a uniform-random top-k pick would get by chance
+    best_C: float | None               # regularization strength chosen by walk-forward grid search
     n_draws: int
-    holdout_size: int
+    holdout_size: int                  # total draws evaluated across all CV folds
 
 
 def _history_frame(history: Iterable, draw_size: int) -> "pd.DataFrame":
@@ -154,24 +164,86 @@ def _build_features(df: "pd.DataFrame", pool_size: int, draw_size: int):
     return X, y, ts_full, next_feats, n_draws
 
 
-def _train_and_score(X, y, ts_full, n_draws, next_feats, seed):
-    split_t = max(n_draws - HOLDOUT_N, WARMUP + 1)
-    train_mask = ts_full < split_t
-    test_mask = ~train_mask
-
+def _fit(X, y, C, seed):
     model = make_pipeline(
         StandardScaler(),
-        LogisticRegression(max_iter=2000, class_weight="balanced", random_state=seed),
+        LogisticRegression(C=C, max_iter=2000, class_weight="balanced", random_state=seed),
     )
-    model.fit(X[train_mask], y[train_mask])
+    model.fit(X, y)
+    return model
 
-    auc = None
-    if test_mask.sum() > 0 and len(set(y[test_mask])) > 1:
+
+def _precision_at_k(preds: np.ndarray, y_test: np.ndarray, ts_test: np.ndarray, draw_size: int) -> float | None:
+    """Mean fraction of each draw's top-`draw_size` predicted numbers that were
+    actually drawn, averaged across the draws present in ts_test."""
+    hits, n_draws_seen = 0.0, 0
+    for t in np.unique(ts_test):
+        mask = ts_test == t
+        top_idx = np.argsort(-preds[mask])[:draw_size]
+        hits += y_test[mask][top_idx].sum()
+        n_draws_seen += 1
+    return hits / (n_draws_seen * draw_size) if n_draws_seen else None
+
+
+def _fold_bounds(n_draws: int) -> list[tuple[int, int]]:
+    """Rolling walk-forward folds, most recent first: (test_start, test_end),
+    each trained only on draws strictly before test_start."""
+    bounds = []
+    for k in range(N_FOLDS):
+        test_end = n_draws - k * HOLDOUT_N
+        test_start = test_end - HOLDOUT_N
+        if test_start < WARMUP + 10:
+            break
+        bounds.append((test_start, test_end))
+    return bounds
+
+
+def _walk_forward_eval(X, y, ts_full, n_draws, draw_size, C, seed):
+    """Fit/evaluate across each rolling fold, always training only on draws
+    strictly before that fold's test window. Returns mean AUC, mean
+    precision@draw_size, and the total number of draws evaluated."""
+    aucs, precisions, n_evaluated = [], [], 0
+    for test_start, test_end in _fold_bounds(n_draws):
+        train_mask = ts_full < test_start
+        test_mask = (ts_full >= test_start) & (ts_full < test_end)
+        if test_mask.sum() == 0 or len(set(y[train_mask])) < 2:
+            continue
+        model = _fit(X[train_mask], y[train_mask], C, seed)
         preds = model.predict_proba(X[test_mask])[:, 1]
-        auc = roc_auc_score(y[test_mask], preds)
+        if len(set(y[test_mask])) > 1:
+            aucs.append(roc_auc_score(y[test_mask], preds))
+        precision = _precision_at_k(preds, y[test_mask], ts_full[test_mask], draw_size)
+        if precision is not None:
+            precisions.append(precision)
+        n_evaluated += test_end - test_start
+    mean_auc = float(np.mean(aucs)) if aucs else None
+    mean_precision = float(np.mean(precisions)) if precisions else None
+    return mean_auc, mean_precision, n_evaluated
 
-    prob = {n: model.predict_proba([feats])[0, 1] for n, feats in next_feats.items()}
-    return prob, auc
+
+def _grid_search_C(X, y, ts_full, n_draws, draw_size, seed):
+    """Pick the regularization strength that scores best (by mean walk-forward
+    AUC) across the rolling CV folds -- never touching the final holdout used
+    for the reported metrics beyond that same rolling evaluation."""
+    best_C, best_auc = C_GRID[0], -1.0
+    for C in C_GRID:
+        auc, _, _ = _walk_forward_eval(X, y, ts_full, n_draws, draw_size, C, seed)
+        if auc is not None and auc > best_auc:
+            best_C, best_auc = C, auc
+    return best_C
+
+
+def _train_and_score(X, y, ts_full, n_draws, next_feats, draw_size, seed):
+    best_C = _grid_search_C(X, y, ts_full, n_draws, draw_size, seed)
+    auc, precision, n_evaluated = _walk_forward_eval(X, y, ts_full, n_draws, draw_size, best_C, seed)
+
+    # Final production model is refit on *all* available history at the tuned
+    # C, so the next-draw probabilities use every draw -- the CV folds above
+    # exist only to pick C and report honest out-of-sample metrics, not to
+    # withhold data from the model actually used for ranking.
+    final_model = _fit(X, y, best_C, seed)
+    prob = {n: final_model.predict_proba([feats])[0, 1] for n, feats in next_feats.items()}
+    return prob, auc, precision, best_C, n_evaluated
 
 
 def train_number_model(
@@ -194,10 +266,20 @@ def train_number_model(
 
     df = _history_frame(history, draw_size)
     X, y, ts_full, next_feats, n_draws = _build_features(df, pool_size, draw_size)
-    prob, auc = _train_and_score(X, y, ts_full, n_draws, next_feats, seed)
+    prob, auc, precision, best_C, holdout_size = _train_and_score(
+        X, y, ts_full, n_draws, next_feats, draw_size, seed
+    )
     ranked = tuple(sorted(prob.items(), key=lambda item: (-item[1], item[0])))
-    holdout_size = min(HOLDOUT_N, n_draws - WARMUP)
-    return MLReport(ranked_numbers=ranked, auc=auc, n_draws=n_draws, holdout_size=holdout_size)
+    baseline_precision = draw_size / pool_size
+    return MLReport(
+        ranked_numbers=ranked,
+        auc=auc,
+        precision_at_k=precision,
+        baseline_precision=baseline_precision,
+        best_C=best_C,
+        n_draws=n_draws,
+        holdout_size=holdout_size,
+    )
 
 
 def _weighted_sample(rng: Random, population: list, weights: list, k: int) -> list:

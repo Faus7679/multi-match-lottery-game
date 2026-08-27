@@ -98,6 +98,8 @@ class MLTicketResult:
     note: str
     ranked_numbers: tuple[tuple[int, float], ...] | None = None
     auc: float | None = None
+    precision_at_k: float | None = None
+    baseline_precision: float | None = None
 
 
 def normalize_line(numbers: Iterable[int]) -> tuple[int, ...]:
@@ -370,13 +372,15 @@ def generate_ml_smart_tickets(
     lines_per_ticket: int = LINES_PER_TICKET,
     seed: int | None = None,
 ) -> MLTicketResult:
-    """Try an ML-weighted pick: a logistic regression per number trained on causal
-    historical features (frequency, recency, overdue gap, pair momentum -- see
-    ml_model.py). Its predicted probabilities bias which numbers get sampled;
-    the held-out AUC is reported alongside so you can see how well the model's
-    ranking actually held up on recent draws. Falls back to a plain random pick
-    if scikit-learn/pandas aren't installed or there isn't enough history to
-    train on."""
+    """Try an ML-weighted pick: a logistic regression per number, tuned by walk-
+    forward cross-validation (grid search over regularization strength, evaluated
+    across several rolling train/test splits -- see ml_model.py) on causal
+    historical features (frequency, recency, overdue gap, pair momentum). Its
+    predicted probabilities bias which numbers get sampled; the cross-validated
+    AUC and precision@k are reported alongside so you can see how well the
+    model's ranking actually held up out of sample. Falls back to a plain
+    random pick if scikit-learn/pandas aren't installed or there isn't enough
+    history to train on."""
     try:
         import ml_model
     except ImportError:
@@ -396,12 +400,15 @@ def generate_ml_smart_tickets(
     tickets = ml_model.generate_ml_tickets(report, num_tickets, lines_per_ticket, DRAW_SIZE, seed=seed)
     if report.auc is not None:
         note = (
-            f"trained on {report.n_draws} draws; held-out ROC-AUC={report.auc:.3f} "
-            f"over last {report.holdout_size} draws"
+            f"trained on {report.n_draws} draws; C={report.best_C:g} (grid-searched); "
+            f"cross-val ROC-AUC={report.auc:.3f} over {report.holdout_size} held-out draws"
         )
     else:
-        note = f"trained on {report.n_draws} draws (held-out AUC unavailable)"
-    return MLTicketResult(tickets, "ml", note, report.ranked_numbers, report.auc)
+        note = f"trained on {report.n_draws} draws (cross-val AUC unavailable)"
+    return MLTicketResult(
+        tickets, "ml", note, report.ranked_numbers, report.auc,
+        report.precision_at_k, report.baseline_precision,
+    )
 
 
 def _random_tickets(
@@ -548,9 +555,14 @@ def main() -> None:
         auc_note = f"{ml_result.auc:.3f}" if ml_result.auc is not None else "n/a"
         print("-" * W)
         print(f"  Top-10 numbers by model probability: {top10}")
-        print(f"  Held-out AUC: {auc_note}  (0.5 = model found no usable signal; each")
-        print(f"  draw is an independent random event, so treat every line as a pick,")
-        print(f"  not a prediction.)")
+        print(f"  Cross-val AUC: {auc_note}  (0.5 = no usable signal found)")
+        if ml_result.precision_at_k is not None:
+            print(
+                f"  Precision@{DRAW_SIZE}: {ml_result.precision_at_k:.3f}  "
+                f"vs. {ml_result.baseline_precision:.3f} baseline for a uniform-random pick"
+            )
+        print(f"  Each draw is an independent random event -- treat every line as a")
+        print(f"  pick, not a prediction.")
         print()
 
     print("-" * W)
