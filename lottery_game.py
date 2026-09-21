@@ -98,8 +98,9 @@ class MLTicketResult:
     note: str
     ranked_numbers: tuple[tuple[int, float], ...] | None = None
     auc: float | None = None
-    precision_at_k: float | None = None
-    baseline_precision: float | None = None
+    best_line: tuple[int, ...] | None = None          # model's single most likely number per position
+    position_accuracy: tuple[float | None, ...] | None = None  # cross-val top-1 hit rate per position
+    position_baseline: tuple[float | None, ...] | None = None  # same, for a frequency-only guess
 
 
 def normalize_line(numbers: Iterable[int]) -> tuple[int, ...]:
@@ -372,17 +373,16 @@ def generate_ml_smart_tickets(
     lines_per_ticket: int = LINES_PER_TICKET,
     seed: int | None = None,
 ) -> MLTicketResult:
-    """Try an ML-weighted pick: a logistic regression per number, tuned by walk-
-    forward cross-validation (grid search over regularization strength, evaluated
-    across several rolling train/test splits -- see ml_model.py) on causal
-    historical features (frequency, recency, overdue gap, pair momentum). Its
-    predicted probabilities bias which numbers get sampled; the cross-validated
-    AUC and precision@k are reported alongside so you can see how well the
-    model's ranking actually held up out of sample. Falls back to a plain
-    random pick if scikit-learn/pandas aren't installed or there isn't enough
-    history to train on."""
+    """Try a position-based ML pick: one logistic regression per draw position
+    (n1..n6 of the sorted draw) scores every candidate number for that slot, tuned
+    by walk-forward cross-validation on causal historical features (see
+    ml_positional.py). Lines are built position by position from those
+    probabilities. The cross-validated top-1 hit rate per position is reported next
+    to a frequency-only baseline so you can see whether the model beats it. Falls
+    back to a plain random pick if scikit-learn/pandas aren't installed or there
+    isn't enough history to train on."""
     try:
-        import ml_model
+        import ml_positional
     except ImportError:
         return MLTicketResult(
             _random_tickets(num_tickets, lines_per_ticket, seed),
@@ -390,24 +390,30 @@ def generate_ml_smart_tickets(
             "ML libraries (scikit-learn/pandas) not installed",
         )
 
+    pool_size = max(NUMBER_RANGE)
     try:
-        report = ml_model.train_number_model(
-            tuple(history), pool_size=max(NUMBER_RANGE), draw_size=DRAW_SIZE, seed=seed
+        report = ml_positional.train_positional_model(
+            tuple(history), pool_size=pool_size, draw_size=DRAW_SIZE, seed=seed
         )
-    except ml_model.InsufficientHistory as exc:
+    except ml_positional.InsufficientHistory as exc:
         return MLTicketResult(_random_tickets(num_tickets, lines_per_ticket, seed), "random", str(exc))
 
-    tickets = ml_model.generate_ml_tickets(report, num_tickets, lines_per_ticket, DRAW_SIZE, seed=seed)
-    if report.auc is not None:
-        note = (
-            f"trained on {report.n_draws} draws; C={report.best_C:g} (grid-searched); "
-            f"cross-val ROC-AUC={report.auc:.3f} over {report.holdout_size} held-out draws"
-        )
-    else:
-        note = f"trained on {report.n_draws} draws (cross-val AUC unavailable)"
+    tickets = ml_positional.generate_positional_tickets(
+        report, num_tickets, lines_per_ticket, pool_size, DRAW_SIZE, seed=seed
+    )
+    # A number sits in exactly one position, so its chance of being drawn at all is
+    # the sum of its per-position probabilities.
+    ranked = tuple(sorted(
+        ((n, sum(pos[n] for pos in report.position_probs)) for n in NUMBER_RANGE),
+        key=lambda item: (-item[1], item[0]),
+    ))
+    note = (
+        f"trained on {report.n_draws} draws; C={report.best_C:g} (grid-searched); "
+        f"cross-validated over {report.holdout_size} held-out draws"
+    )
     return MLTicketResult(
-        tickets, "ml", note, report.ranked_numbers, report.auc,
-        report.precision_at_k, report.baseline_precision,
+        tickets, "ml", note, ranked, report.auc,
+        report.best_line, report.position_accuracy, report.position_baseline,
     )
 
 
@@ -509,7 +515,7 @@ def main() -> None:
     print(f"  Data   : {data_label}")
     print(f"  History: {len(history)} draws  ({history[0].draw_date} to {history[-1].draw_date})")
     if ml_result.source == "ml":
-        print(f"  Model  : logistic regression per number, {ml_result.note}")
+        print(f"  Model  : logistic regression per position, {ml_result.note}")
     else:
         print(f"  Model  : random pick ({ml_result.note})")
     print()
@@ -551,16 +557,12 @@ def main() -> None:
             print()
 
     if ml_result.source == "ml" and ml_result.ranked_numbers:
-        top10 = ", ".join(f"{n}({p:.3f})" for n, p in ml_result.ranked_numbers[:10])
-        auc_note = f"{ml_result.auc:.3f}" if ml_result.auc is not None else "n/a"
         print("-" * W)
-        print(f"  Top-10 numbers by model probability: {top10}")
-        print(f"  Cross-val AUC: {auc_note}  (0.5 = no usable signal found)")
-        if ml_result.precision_at_k is not None:
-            print(
-                f"  Precision@{DRAW_SIZE}: {ml_result.precision_at_k:.3f}  "
-                f"vs. {ml_result.baseline_precision:.3f} baseline for a uniform-random pick"
-            )
+        best = ", ".join(f"{n:02d}" for n in ml_result.best_line)
+        print(f"  Model's top pick per position: {style.BOLD}{style.YELLOW}{best}{style.RESET}")
+        print(f"  Cross-val top-1 hit rate by position (model vs. frequency-only baseline):")
+        for pos, (acc, base) in enumerate(zip(ml_result.position_accuracy, ml_result.position_baseline), start=1):
+            print(f"    n{pos}: {acc:.3f} vs {base:.3f}")
         print(f"  Each draw is an independent random event -- treat every line as a")
         print(f"  pick, not a prediction.")
         print()

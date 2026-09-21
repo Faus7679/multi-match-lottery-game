@@ -133,10 +133,13 @@ class LotteryGameTests(unittest.TestCase):
         if result.auc is not None:
             self.assertGreaterEqual(result.auc, 0.0)
             self.assertLessEqual(result.auc, 1.0)
-        if result.precision_at_k is not None:
-            self.assertGreaterEqual(result.precision_at_k, 0.0)
-            self.assertLessEqual(result.precision_at_k, 1.0)
-            self.assertAlmostEqual(result.baseline_precision, DRAW_SIZE / 43)
+        self.assertEqual(len(result.best_line), DRAW_SIZE)
+        self.assertEqual(normalize_line(result.best_line), result.best_line)
+        self.assertEqual(len(result.position_accuracy), DRAW_SIZE)
+        self.assertEqual(len(result.position_baseline), DRAW_SIZE)
+        for value in result.position_accuracy + result.position_baseline:
+            self.assertGreaterEqual(value, 0.0)
+            self.assertLessEqual(value, 1.0)
         self._assert_valid_tickets(result.tickets)
 
     def test_generate_ml_smart_tickets_is_reproducible_with_a_seed(self) -> None:
@@ -156,7 +159,7 @@ class LotteryGameTests(unittest.TestCase):
         self.assertEqual(result.source, "random")
         self.assertIsNone(result.ranked_numbers)
         self.assertIsNone(result.auc)
-        self.assertIsNone(result.precision_at_k)
+        self.assertIsNone(result.best_line)
         self._assert_valid_tickets(result.tickets)
 
     def _assert_valid_tickets(self, tickets: tuple) -> None:
