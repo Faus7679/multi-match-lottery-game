@@ -34,7 +34,7 @@ is an independent random event, treat every line — ML-weighted or not — as a
     (see "Machine learning" below)
 - `ml_positional.py`
   - the ML pick `main()` uses: one logistic regression per draw position (n1–n6), so each slot
-    is scored on its own pattern; lines are built position by position (see "Machine learning")
+    is scored on its own pattern; lines are built position by position, unsorted (see "Machine learning")
 - `test_lottery_game.py`
   - focused unit tests
 
@@ -91,7 +91,8 @@ This gives a simple historical-stats view for Maryland Monday and Thursday draw 
 and trains one logistic regression per position that scores every number 1–43 for that slot, using
 causal features (frequency at that position, recent frequency at that position, draws since it last
 landed there, any-position recent frequency, distance from the previous draw's number in that slot).
-Lines are sampled left to right, each number above the last, weighted by the position's probabilities.
+Lines are sampled position by position from each position's own probabilities (no repeated numbers
+within a line) and shown in position order n1…n6 — they are not forced into ascending order.
 Tuning uses the same walk-forward cross-validation described below. It reports the **top-1 hit rate
 per position** against a frequency-only baseline (always guess the historically most common number for
 that slot); expect the model to land near that baseline. `ml_model.py`, described next, is the

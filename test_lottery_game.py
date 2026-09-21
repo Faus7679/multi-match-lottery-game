@@ -134,13 +134,21 @@ class LotteryGameTests(unittest.TestCase):
             self.assertGreaterEqual(result.auc, 0.0)
             self.assertLessEqual(result.auc, 1.0)
         self.assertEqual(len(result.best_line), DRAW_SIZE)
-        self.assertEqual(normalize_line(result.best_line), result.best_line)
+        self.assertEqual(len(set(result.best_line)), DRAW_SIZE)
         self.assertEqual(len(result.position_accuracy), DRAW_SIZE)
         self.assertEqual(len(result.position_baseline), DRAW_SIZE)
         for value in result.position_accuracy + result.position_baseline:
             self.assertGreaterEqual(value, 0.0)
             self.assertLessEqual(value, 1.0)
         self._assert_valid_tickets(result.tickets)
+
+    def test_positional_lines_are_not_forced_into_ascending_order(self) -> None:
+        history = sample_maryland_history()
+
+        result = generate_ml_smart_tickets(history, num_tickets=40, seed=5)
+
+        lines = [line for ticket in result.tickets for line in ticket]
+        self.assertTrue(any(line != tuple(sorted(line)) for line in lines))
 
     def test_generate_ml_smart_tickets_is_reproducible_with_a_seed(self) -> None:
         history = sample_maryland_history()
@@ -168,10 +176,12 @@ class LotteryGameTests(unittest.TestCase):
             self.assertEqual(len(ticket), 3)
             lines_in_ticket: set[tuple[int, ...]] = set()
             for line in ticket:
-                self.assertEqual(normalize_line(line), line)
+                # ML lines are in position order, so compare the set of numbers.
+                as_set = tuple(sorted(line))
                 self.assertEqual(len(line), DRAW_SIZE)
-                self.assertNotIn(line, lines_in_ticket)
-                lines_in_ticket.add(line)
+                self.assertEqual(normalize_line(line), as_set)
+                self.assertNotIn(as_set, lines_in_ticket)
+                lines_in_ticket.add(as_set)
 
     def test_evaluate_ticket_counts_matches_per_line(self) -> None:
         ticket = (

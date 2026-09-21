@@ -5,8 +5,8 @@ Each draw is sorted, so it has six positions (n1 <= ... <= n6) with very
 different ranges -- n1 is usually small, n6 usually large. Instead of ranking
 numbers regardless of where they land (see ml_model.py), this module trains
 one logistic regression *per position* that scores every candidate number
-for that slot, then builds lines by choosing position by position (left to
-right, each number strictly above the last).
+for that slot, then builds lines by choosing position by position from each
+position's own probabilities. Picks are not forced into ascending order.
 
 Features for (draw t, position p, candidate number n) are built causally --
 only draws before t are used:
@@ -28,7 +28,6 @@ independent random events, so expect the model to land near that baseline.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import comb
 from random import Random
 from typing import Iterable
 
@@ -57,7 +56,7 @@ ANY_POSITION_WINDOW = REC_WINDOWS[1]
 @dataclass(frozen=True)
 class PositionalReport:
     position_probs: tuple[tuple[float, ...], ...]  # [position][number], index 0 unused
-    best_line: tuple[int, ...]                      # most likely number at each position, ascending
+    best_line: tuple[int, ...]                      # most likely number at each position, in position order
     position_accuracy: tuple[float | None, ...]     # top-1 hit rate per position across CV folds
     position_baseline: tuple[float | None, ...]     # same, for a frequency-only guess
     auc: float | None                               # mean ROC-AUC across positions and folds
@@ -186,33 +185,25 @@ def train_positional_model(
     )
 
 
-def _bounds(position: int, previous: int, pool_size: int, draw_size: int) -> range:
-    """Numbers legal at `position` given the number chosen just before it: strictly
-    above it, leaving room for the positions still to fill."""
-    return range(previous + 1, pool_size - (draw_size - 1 - position) + 1)
-
-
 def _greedy_line(probs, pool_size: int, draw_size: int) -> tuple[int, ...]:
-    line, previous = [], 0
+    """Most likely number for each position, in position order (n1..n6). Not forced
+    ascending; a number already taken by an earlier position is skipped."""
+    line: list[int] = []
     for p in range(draw_size):
-        pick = max(_bounds(p, previous, pool_size, draw_size), key=lambda n: probs[p][n])
+        pick = max((n for n in range(1, pool_size + 1) if n not in line), key=lambda n: probs[p][n])
         line.append(pick)
-        previous = pick
     return tuple(line)
 
 
 def generate_positional_line(report: PositionalReport, rng: Random, pool_size: int, draw_size: int) -> tuple[int, ...]:
-    line, previous = [], 0
+    """One line, n1..n6 in position order. Each position draws from its own
+    probabilities over every number not already used in the line -- there is no
+    ascending constraint, so the result is returned exactly as picked."""
+    line: list[int] = []
     for p in range(draw_size):
-        candidates = list(_bounds(p, previous, pool_size, draw_size))
-        # Scale by how many ascending completions each choice leaves open, so a flat
-        # model reproduces a uniform random line instead of piling into high numbers.
-        weights = [
-            max(report.position_probs[p][n], 1e-6) * comb(pool_size - n, draw_size - 1 - p)
-            for n in candidates
-        ]
-        previous = rng.choices(candidates, weights=weights, k=1)[0]
-        line.append(previous)
+        candidates = [n for n in range(1, pool_size + 1) if n not in line]
+        weights = [max(report.position_probs[p][n], 1e-6) for n in candidates]
+        line.append(rng.choices(candidates, weights=weights, k=1)[0])
     return tuple(line)
 
 
@@ -225,15 +216,17 @@ def generate_positional_tickets(
     seed: int | None = None,
 ) -> tuple[tuple[tuple[int, ...], ...], ...]:
     """Tickets whose lines are sampled position by position from each position's
-    predicted probabilities. Higher-probability numbers are likelier, but every
-    legal number keeps a nonzero chance -- a weighting, not a guarantee."""
+    predicted probabilities, in position order rather than sorted. Higher-probability
+    numbers are likelier, but every number keeps a nonzero chance -- a weighting,
+    not a guarantee."""
     rng = Random(seed)
     tickets = []
     for _ in range(num_tickets):
         ticket: list[tuple[int, ...]] = []
         while len(ticket) < lines_per_ticket:
             line = generate_positional_line(report, rng, pool_size, draw_size)
-            if line not in ticket:
+            # Same six numbers in a different order is still the same line to play.
+            if all(set(line) != set(other) for other in ticket):
                 ticket.append(line)
         tickets.append(tuple(ticket))
     return tuple(tickets)
